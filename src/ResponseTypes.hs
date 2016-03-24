@@ -26,8 +26,9 @@ data Response a = Response
   , lid :: Text
   } deriving Show
 
+-- TODO get rid of this orphan instance
 instance FromJSON (Time.NominalDiffTime) where
-  parseJSON (Aeson.Number n) = return (realToFrac (Scientific.toRealFloat n))
+  parseJSON (Aeson.Number n) = return (realToFrac (Scientific.toRealFloat (n / 1000)))
   parseJSON invalid = Aeson.typeMismatch "NominalDiffTime" invalid
 
 parseResponse :: FromJSON a => Text -> (Aeson.Value -> Aeson.Parser (Response a))
