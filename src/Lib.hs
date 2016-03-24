@@ -9,6 +9,9 @@ import BasicPrelude
 import qualified Data.Char as Char
 import qualified Data.Maybe as Maybe
 
+import qualified Control.Monad.State as State
+import Control.Monad.State (State, StateT)
+
 import qualified Data.Text.Encoding as Encoding
 import qualified Data.Text as Text (pack)
 import qualified Data.HashMap.Strict as HashMap
@@ -20,7 +23,7 @@ import Network.Wreq (FormParam((:=)))
 
 import Lens.Family ((&), (.~), (^.), (^..), (^?), over)
 
-import qualified Numeric (showHex)
+import qualified Numeric
 import qualified Data.Time.Clock as Time
 import qualified Data.Time.Clock.POSIX as Time.POSIX
 
@@ -34,11 +37,11 @@ import qualified Text.XML.Cursor as XML
 
 -- Easy traversal of JSON data.
 -- import Data.Aeson.Lens (key, nth)
+-- import qualified Data.ByteString as ByteString
 import qualified Data.ByteString.Lens as ByteString
 import qualified Data.Text.Lens as Text
 
-someFunc :: IO ()
-someFunc = putStrLn "someFunc"
+encode = Encoding.encodeUtf8
 
 -- loginURL, searchURL, sendURL, threadsURL, threadSyncURL, messagesURL, readStatusURL, deliveredURL, markSeenURL, baseURL, mobileURL, stickyURL, pingURL :: Text
 loginURL      = "https://m.facebook.com/login.php?login_attempt=1"
@@ -78,8 +81,10 @@ data FBSession = FBSession
   , prev :: Time.UTCTime
   , tmpPrev :: Time.UTCTime
   , lastSync :: Time.UTCTime
-  , form :: [Wreq.FormParam]
-  , payloadDefault :: [Wreq.FormParam]
+  -- , form :: [Wreq.FormParam]
+  , form :: Params
+  -- , payloadDefault :: [Wreq.FormParam]
+  , payloadDefault :: Params
   , ttStamp :: Text
   , uid :: Integer
   , userChannel :: Text
@@ -133,6 +138,41 @@ headerOptions h = foldr1 (.) updates
 
 doHeader = headerOptions . mkHeader
 
+type Params = [(Text, Text)]
+
+post' :: String -> Params -> StateT FBSession IO (Wreq.Response LByteString)
+post' url params = do
+  fbState <- State.get
+  payload <- generatePayload params
+  State.liftIO $ Wreq.Session.post (session fbState) url (paramsToFormParams payload)
+
+  where
+    paramsToFormParams :: Params -> [FormParam]
+    paramsToFormParams ps = [ (encode name) := (encode value) | (name, value) <- ps ]
+
+get' :: String -> Params -> StateT FBSession IO (Wreq.Response LByteString)
+get' url params = do
+  fbState <- State.get
+  payload <- generatePayload params
+  let opts = Wreq.defaults & foldr1 (.) (map toParam payload)
+  State.liftIO $ Wreq.Session.getWith opts (session fbState) url
+  where
+    toParam (name, value) = Wreq.param name .~ [value]
+
+generatePayload :: Monad m => Params -> StateT FBSession m Params
+generatePayload params = do
+  fbState <- State.get
+  let count' = (requestCounter fbState) + 1
+
+      encodeDigit x
+        | 0  <= x && x < 10 = Char.chr (x - Char.ord '0')
+        | 10 <= x && x < 36 = Char.chr ((x - 10) - Char.ord 'a')
+
+      params' = (payloadDefault fbState) ++ params
+                ++ [("__req", Text.pack $ Numeric.showIntAtBase 36 encodeDigit count' "")]
+
+  State.put $ fbState { requestCounter = count' }
+  return params
 
 login :: Wreq.Session.Session -> Authentication -> IO FBSession
 login session (Authentication username password) = do
@@ -200,26 +240,26 @@ login session (Authentication username password) = do
     _ -> return ()
 
   let
-    payloadDefault :: [FormParam]
+    payloadDefault :: Params
     payloadDefault =
-      [ "__rev"   := revision
-      , "__user"  := uid
-      , "__a"     := ("1" :: Text)
-      , "ttstamp" := ttStamp
-      , "fb_dtsg" := fb_dtsg
+      [ ("__rev",   revision)
+      , ("__user",  show uid)
+      , ("__a",     "1")
+      , ("ttstamp", ttStamp)
+      , ("fb_dtsg", fb_dtsg)
       ]
 
-    form :: [Wreq.FormParam]
+    form :: Params
     form =
-      [ "channel"    := userChannel
-      , "partition"  := ("-2" :: Text)
-      , "clientid"   := clientId
-      , "viewer_uid" := uid
-      , "uid"        := uid
-      , "state"      := ("active" :: Text)
-      , "format"     := ("json" :: Text)
-      , "idle"       := ("0" :: Text)
-      , "cap"        := ("8" :: Text)
+      [ ("channel"    , Maybe.fromJust userChannel)
+      , ("partition"  , "-2")
+      , ("clientid"   , clientId)
+      , ("viewer_uid" , show uid)
+      , ("uid"        , show uid)
+      , ("state"      , "active")
+      , ("format"     , "json")
+      , ("idle"       , "0")
+      , ("cap"        , "8")
       ]
 
     prev     = now

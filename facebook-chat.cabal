@@ -8,17 +8,23 @@ library
   exposed-modules:     Lib
   build-depends:       base >= 4.7 && < 5
                      , basic-prelude
+                     , mtl
+                     , unordered-containers
+                     , random
+                     , time
+
                      , text
+                     , bytestring
+
                      , wreq
                      , lens-family-core
                      , lens
                      , aeson
                      , lens-aeson
+
                      , html-conduit
                      , xml-conduit
-                     , unordered-containers
-                     , random
-                     , time
+
   default-language:    Haskell2010
 
 executable facebook-chat-exe
