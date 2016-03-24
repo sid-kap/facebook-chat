@@ -26,9 +26,10 @@ import qualified Numeric
 import qualified Data.Time.Clock as Time
 import qualified Data.Time.Clock.POSIX as Time.POSIX
 
--- Conversion of Haskell values to JSON.
-import qualified Data.Aeson      as Aeson
-import qualified Data.Aeson.Lens as Aeson
+import qualified Data.Aeson       as Aeson
+import qualified Data.Aeson.Types as Aeson
+import           Data.Aeson                (FromJSON)
+import qualified Data.Aeson.Lens  as Aeson
 
 import qualified Text.HTML.DOM as HTML
 import qualified Text.XML as XML
@@ -45,14 +46,18 @@ import qualified Text.Parsec.Combinator as Parsec
 import qualified Text.ParserCombinators.Parsec.Char as Parsec
 import Text.Parsec.ByteString.Lazy (Parser)
 
+import qualified ResponseTypes as ResponseTypes
+
 -- TODO make the type (LByteString) more explicit,
 -- make more efficient (avoid intermediate string and the many string
 -- type conversion), and possibly use something other than parsec
-parseJson :: Parser (Maybe Aeson.Value)
+-- parseJson :: FromJSON a => Parser (Maybe a)
+parseJson :: Parser Text
 parseJson = do
   Parsec.string "for (;;);"
   jsonString <- Applicative.many Parsec.anyChar
-  return (Aeson.decode $ ByteString.Lazy.fromStrict $ encode $ Text.pack jsonString)
+  return (Text.pack jsonString)
+  -- return (Aeson.decode $ ByteString.Lazy.fromStrict $ encode $ Text.pack jsonString)
 
 encode = Encoding.encodeUtf8
 
@@ -206,11 +211,22 @@ getThreadList = do
 
   let
     body = r ^? Wreq.responseBody
-    parserResult = Parsec.parse parseJson "foo" <$> body
+    jsonString = (eitherToMaybe . Parsec.parse parseJson "foo") =<< body
 
-  print parserResult
+    response :: Either String (ResponseTypes.Response [ResponseTypes.Thread])
+    response = Aeson.parseEither (ResponseTypes.parseResponse "threads") =<< Aeson.eitherDecodeStrict =<< (encode <$> (maybeToEither jsonString))
+
+  liftIO $ ByteString.Lazy.writeFile "threads" (Maybe.fromJust body)
+
+  print response
 
   return r
+
+eitherToMaybe :: Either a b -> Maybe b
+eitherToMaybe = either (const Nothing) Just
+
+maybeToEither :: Maybe b -> Either String b
+maybeToEither = maybe (Left "was Maybe") Right
 
 timeToMilliseconds :: Integral a => Time.UTCTime -> a
 timeToMilliseconds time = round ((Time.POSIX.utcTimeToPOSIXSeconds time) * 1000)
