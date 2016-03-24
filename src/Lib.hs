@@ -1,11 +1,10 @@
 {-# LANGUAGE NoImplicitPrelude, OverloadedStrings #-}
 
 module Lib
-    -- ( someFunc
-    -- ) where
     where
 
 import BasicPrelude
+import qualified Control.Applicative as Applicative
 import qualified Data.Char as Char
 import qualified Data.Maybe as Maybe
 
@@ -37,9 +36,23 @@ import qualified Text.XML.Cursor as XML
 
 -- Easy traversal of JSON data.
 -- import Data.Aeson.Lens (key, nth)
--- import qualified Data.ByteString as ByteString
+import qualified Data.ByteString.Lazy as ByteString.Lazy
 import qualified Data.ByteString.Lens as ByteString
 import qualified Data.Text.Lens as Text
+
+import qualified Text.Parsec as Parsec
+import qualified Text.Parsec.Combinator as Parsec
+import qualified Text.ParserCombinators.Parsec.Char as Parsec
+import Text.Parsec.ByteString.Lazy (Parser)
+
+-- TODO make the type (LByteString) more explicit,
+-- make more efficient (avoid intermediate string and the many string
+-- type conversion), and possibly use something other than parsec
+parseJson :: Parser (Maybe Aeson.Value)
+parseJson = do
+  Parsec.string "for (;;);"
+  jsonString <- Applicative.many Parsec.anyChar
+  return (Aeson.decode $ ByteString.Lazy.fromStrict $ encode $ Text.pack jsonString)
 
 encode = Encoding.encodeUtf8
 
@@ -81,9 +94,7 @@ data FBSession = FBSession
   , prev :: Time.UTCTime
   , tmpPrev :: Time.UTCTime
   , lastSync :: Time.UTCTime
-  -- , form :: [Wreq.FormParam]
   , form :: Params
-  -- , payloadDefault :: [Wreq.FormParam]
   , payloadDefault :: Params
   , ttStamp :: Text
   , uid :: Integer
@@ -129,8 +140,7 @@ headerOptions :: Header -> Wreq.Options -> Wreq.Options
 headerOptions h = foldr1 (.) updates
   where
     updates :: [Wreq.Options -> Wreq.Options]
-    updates = [ -- Wreq.header "Content-Type" .~ [contentType h]
-                Wreq.header "Referer"      .~ [referer h]
+    updates = [ Wreq.header "Referer"      .~ [referer h]
               , Wreq.header "Origin"       .~ [origin h]
               , Wreq.header "User-Agent"   .~ [headerUserAgent h]
               , Wreq.header "Connection"   .~ [connection h]
@@ -144,6 +154,7 @@ post' :: String -> Params -> StateT FBSession IO (Wreq.Response LByteString)
 post' url params = do
   fbState <- State.get
   payload <- generatePayload params
+  State.liftIO $ print payload
   State.liftIO $ Wreq.Session.post (session fbState) url (paramsToFormParams payload)
 
   where
@@ -159,20 +170,50 @@ get' url params = do
   where
     toParam (name, value) = Wreq.param name .~ [value]
 
+-- Not sure that this function should have side effects (incrementing the
+-- request counter). Maybe this should be done in get' and post'.
 generatePayload :: Monad m => Params -> StateT FBSession m Params
 generatePayload params = do
   fbState <- State.get
   let count' = (requestCounter fbState) + 1
 
       encodeDigit x
-        | 0  <= x && x < 10 = Char.chr (x - Char.ord '0')
-        | 10 <= x && x < 36 = Char.chr ((x - 10) - Char.ord 'a')
+        | 0  <= x && x < 10 = Char.chr (x + Char.ord '0')
+        | 10 <= x && x < 36 = Char.chr ((x - 10) + Char.ord 'a')
 
       params' = (payloadDefault fbState) ++ params
                 ++ [("__req", Text.pack $ Numeric.showIntAtBase 36 encodeDigit count' "")]
 
   State.put $ fbState { requestCounter = count' }
-  return params
+  return params'
+
+client = "mercury"
+
+-- TODO accept start/end arguments
+getThreadList :: StateT FBSession IO (Wreq.Response LByteString)
+getThreadList = do
+  now <- liftIO Time.getCurrentTime
+  let
+    timestamp = timeToMilliseconds now
+
+    form =
+      [ ("client",        client)
+      , ("inbox[offset]", "0")
+      , ("inbox[limit]",  "20")
+      ]
+
+  r <- post' threadsURL form
+
+  let
+    body = r ^? Wreq.responseBody
+    parserResult = Parsec.parse parseJson "foo" <$> body
+
+  print parserResult
+
+  return r
+
+timeToMilliseconds :: Integral a => Time.UTCTime -> a
+timeToMilliseconds time = round ((Time.POSIX.utcTimeToPOSIXSeconds time) * 1000)
 
 login :: Wreq.Session.Session -> Authentication -> IO FBSession
 login session (Authentication username password) = do
@@ -214,7 +255,7 @@ login session (Authentication username password) = do
   clientId <- Text.pack . flip Numeric.showHex "" <$> (Random.randomIO :: IO Int)
   now <- Time.getCurrentTime
   let
-    startTime = round ((Time.POSIX.utcTimeToPOSIXSeconds now) * 1000)
+    startTime = timeToMilliseconds now
 
     uid :: Maybe Integer
     uid = (loginResponse ^? Wreq.responseCookie "c_user" . Wreq.cookieValue) >>= (readMay . Encoding.decodeUtf8)
@@ -243,7 +284,7 @@ login session (Authentication username password) = do
     payloadDefault :: Params
     payloadDefault =
       [ ("__rev",   revision)
-      , ("__user",  show uid)
+      , ("__user",  show $ Maybe.fromJust uid)
       , ("__a",     "1")
       , ("ttstamp", ttStamp)
       , ("fb_dtsg", fb_dtsg)
@@ -285,10 +326,3 @@ login session (Authentication username password) = do
 
   -- TODO Somehow check if login was successful and throw/return the error?
   return fbSession
-
-
--- defaultPayload :: FBSession -> Payload
--- defaultPayload fbSession = Payload
---   {
---   user =
---   }
