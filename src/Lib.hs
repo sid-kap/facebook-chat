@@ -212,7 +212,7 @@ timeToMilliseconds time = round ((Time.POSIX.utcTimeToPOSIXSeconds time) * 1000)
 responseToXML :: Wreq.Response LByteString -> XML.Cursor
 responseToXML response = (XML.fromDocument . HTML.parseLBS) (response ^. Wreq.responseBody)
 
-login :: Wreq.Session.Session -> Authentication -> IO FBSession
+login :: Wreq.Session.Session -> Authentication -> IO (Maybe FBSession)
 login session (Authentication username password) = do
   loginPage <- Wreq.Session.get session mobileURL
 
@@ -244,63 +244,68 @@ login session (Authentication username password) = do
   let
     startTime = timeToMilliseconds now
 
-    uid :: Maybe Integer
-    uid = (loginResponse ^? Wreq.responseCookie "c_user" . Wreq.cookieValue) >>= (readMay . Encoding.decodeUtf8)
-    userChannel = (\s -> "p_" <> show s) <$> uid
+    uidMaybe :: Maybe Integer
+    uidMaybe = (loginResponse ^? Wreq.responseCookie "c_user" . Wreq.cookieValue) >>= (readMay . Encoding.decodeUtf8)
 
-    doc2 = responseToXML loginResponse
-    fb_dtsg = concat $ doc2 XML.$.// (XML.attributeIs "name" "fb_dtsg" >=> XML.attribute "value")
+  case uidMaybe of
+    Nothing -> return Nothing
+    Just uid -> do
+      let
+        userChannel = "p_" <> show uid
 
-    ttStamp :: Text
-    ttStamp = concat [show (Char.ord c) <> "2" | c <- fb_dtsg ^.. Text.unpacked . traverse]
+        doc2 = responseToXML loginResponse
+        fb_dtsg = concat $ doc2 XML.$.// (XML.attributeIs "name" "fb_dtsg" >=> XML.attribute "value")
 
-  print uid
-  print ttStamp
-  print (loginResponse ^? Wreq.responseCookie "c_user")
+        ttStamp :: Text
+        ttStamp = concat [show (Char.ord c) <> "2" | c <- fb_dtsg ^.. Text.unpacked . traverse]
 
-  let
-    payloadDefault :: Params
-    payloadDefault =
-      [ ("__rev",   "2246636")
-      , ("__user",  show $ Maybe.fromJust uid)
-      , ("__a",     "1")
-      , ("ttstamp", ttStamp)
-      , ("fb_dtsg", fb_dtsg)
-      ]
+      print uid
+      print ttStamp
+      print (loginResponse ^? Wreq.responseCookie "c_user")
 
-    form :: Params
-    form =
-      [ ("channel"    , Maybe.fromJust userChannel)
-      , ("partition"  , "-2")
-      , ("clientid"   , clientId)
-      , ("viewer_uid" , show uid)
-      , ("uid"        , show uid)
-      , ("state"      , "active")
-      , ("format"     , "json")
-      , ("idle"       , "0")
-      , ("cap"        , "8")
-      ]
+      let
+        payloadDefault :: Params
+        payloadDefault =
+          [ ("__rev",   "2246636")
+          , ("__user",  show uid)
+          , ("__a",     "1")
+          , ("ttstamp", ttStamp)
+          , ("fb_dtsg", fb_dtsg)
+          ]
 
-    prev     = now
-    tmpPrev  = now
-    lastSync = now
+        form :: Params
+        form =
+          [ ("channel"    , userChannel)
+          , ("partition"  , "-2")
+          , ("clientid"   , clientId)
+          , ("viewer_uid" , show uid)
+          , ("uid"        , show uid)
+          , ("state"      , "active")
+          , ("format"     , "json")
+          , ("idle"       , "0")
+          , ("cap"        , "8")
+          ]
 
-    -- todo throw/return an error if there is a failure here
-    fbSession = FBSession
-      { session = session
-      , requestCounter = 1
-      , seq' = ""
-      , sessionUserAgent = encode userAgent
-      , prev = prev
-      , tmpPrev = tmpPrev
-      , lastSync = lastSync
-      , form = form
-      , payloadDefault = payloadDefault
-      , ttStamp = ttStamp
-      , uid = Maybe.fromJust uid
-      , userChannel = Maybe.fromJust userChannel
-      , clientId = clientId
-      }
+        prev     = now
+        tmpPrev  = now
+        lastSync = now
 
-  -- TODO Somehow check if login was successful and throw/return the error?
-  return fbSession
+        -- todo throw/return an error if there is a failure here
+        fbSession = FBSession
+          { session = session
+          , requestCounter = 1
+          , seq' = ""
+          , sessionUserAgent = encode userAgent
+          , prev = prev
+          , tmpPrev = tmpPrev
+          , lastSync = lastSync
+          , form = form
+          , payloadDefault = payloadDefault
+          , ttStamp = ttStamp
+          , uid = uid
+          , userChannel = userChannel
+          , clientId = clientId
+          }
+
+      -- TODO Somehow check if login was successful and throw/return the error?
+      return (Just fbSession)

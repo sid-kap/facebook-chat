@@ -12,5 +12,7 @@ main :: IO ()
 main = Wreq.Session.withSession $ \session -> do
   [username, password] <- lines <$> readFile "credentials"
   let auth = Authentication username password
-  fbSession <- login session auth
-  void $ State.runStateT getThreadList fbSession
+  fbSessionMaybe <- login session auth
+  case fbSessionMaybe of
+    Just fbSession -> void $ State.runStateT getThreadList fbSession
+    Nothing -> putStrLn "error logging in"
