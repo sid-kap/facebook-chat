@@ -35,8 +35,6 @@ import qualified Text.HTML.DOM as HTML
 import qualified Text.XML as XML
 import qualified Text.XML.Cursor as XML
 
--- Easy traversal of JSON data.
--- import Data.Aeson.Lens (key, nth)
 import qualified Data.ByteString.Lazy as ByteString.Lazy
 import qualified Data.ByteString.Lens as ByteString
 import qualified Data.Text.Lens as Text
@@ -57,7 +55,6 @@ parseJson = do
   Parsec.string "for (;;);"
   jsonString <- Applicative.many Parsec.anyChar
   return (Text.pack jsonString)
-  -- return (Aeson.decode $ ByteString.Lazy.fromStrict $ encode $ Text.pack jsonString)
 
 encode = Encoding.encodeUtf8
 
@@ -76,15 +73,11 @@ mobileURL     = "https://m.facebook.com/"
 stickyURL     = "https://0-edge-chat.facebook.com/pull"
 pingURL       = "https://0-channel-proxy-06-ash2.facebook.com/active_ping"
 
-userAgents :: [Text]
-userAgents =
-  [ "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/42.0.2311.90 Safari/537.36"
-  , "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_3) AppleWebKit/601.1.10 (KHTML, like Gecko) Version/8.0.5 Safari/601.1.10"
-  , "Mozilla/5.0 (Windows NT 6.3; WOW64; ; NCT50_AAP285C84A1328) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/42.0.2311.90 Safari/537.36"
-  , "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.1 (KHTML, like Gecko) Chrome/22.0.1207.1 Safari/537.1"
-  , "Mozilla/5.0 (X11; CrOS i686 2268.111.0) AppleWebKit/536.11 (KHTML, like Gecko) Chrome/20.0.1132.57 Safari/536.11"
-  , "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/536.6 (KHTML, like Gecko) Chrome/20.0.1092.0 Safari/536.6"
-  ]
+userAgent :: Text
+userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/42.0.2311.90 Safari/537.36"
+
+client :: Text
+client = "mercury"
 
 data Authentication = Authentication
   { username :: Text
@@ -123,21 +116,12 @@ data Payload = Payload
   , fb_dtsg :: Text
   }
 
-mkHeader :: FBSession -> Header
-mkHeader fbSession = Header
-  { contentType = "application/x-www-form-urlencoded"
-  , referer = Encoding.encodeUtf8 baseURL
-  , origin = Encoding.encodeUtf8 baseURL
-  , headerUserAgent = sessionUserAgent fbSession
-  , connection = "keep-alive"
-  }
-
 defaultHeader :: Header
 defaultHeader = Header
   { contentType = "application/x-www-form-urlencoded"
-  , referer = Encoding.encodeUtf8 baseURL
-  , origin = Encoding.encodeUtf8 baseURL
-  , headerUserAgent = Encoding.encodeUtf8 (head userAgents)
+  , referer = encode baseURL
+  , origin = encode baseURL
+  , headerUserAgent = encode userAgent
   , connection = "keep-alive"
   }
 
@@ -151,8 +135,6 @@ headerOptions h = foldr1 (.) updates
               , Wreq.header "Connection"   .~ [connection h]
               ]
 
-doHeader = headerOptions . mkHeader
-
 type Params = [(Text, Text)]
 
 post' :: String -> Params -> StateT FBSession IO (Wreq.Response LByteString)
@@ -160,11 +142,11 @@ post' url params = do
   fbState <- State.get
   payload <- generatePayload params
   State.liftIO $ print payload
-  State.liftIO $ Wreq.Session.post (session fbState) url (paramsToFormParams payload)
+  State.liftIO $ Wreq.Session.post (session fbState) url (map paramToFormParam payload)
 
   where
-    paramsToFormParams :: Params -> [FormParam]
-    paramsToFormParams ps = [ (encode name) := (encode value) | (name, value) <- ps ]
+    paramToFormParam :: (Text, Text) -> FormParam
+    paramToFormParam (name, value) = (encode name) := (encode value)
 
 get' :: String -> Params -> StateT FBSession IO (Wreq.Response LByteString)
 get' url params = do
@@ -192,8 +174,6 @@ generatePayload params = do
   State.put $ fbState { requestCounter = count' }
   return params'
 
-client = "mercury"
-
 -- TODO accept start/end arguments
 getThreadList :: StateT FBSession IO (Wreq.Response LByteString)
 getThreadList = do
@@ -216,8 +196,6 @@ getThreadList = do
     response :: Either String (ResponseTypes.Response [ResponseTypes.Thread])
     response = Aeson.parseEither (ResponseTypes.parseResponse "threads") =<< Aeson.eitherDecodeStrict =<< (encode <$> (maybeToEither jsonString))
 
-  liftIO $ ByteString.Lazy.writeFile "threads" (Maybe.fromJust body)
-
   print response
 
   return r
@@ -231,19 +209,21 @@ maybeToEither = maybe (Left "was Maybe") Right
 timeToMilliseconds :: Integral a => Time.UTCTime -> a
 timeToMilliseconds time = round ((Time.POSIX.utcTimeToPOSIXSeconds time) * 1000)
 
+responseToXML :: Wreq.Response LByteString -> XML.Cursor
+responseToXML response = (XML.fromDocument . HTML.parseLBS) (response ^. Wreq.responseBody)
+
 login :: Wreq.Session.Session -> Authentication -> IO FBSession
 login session (Authentication username password) = do
   loginPage <- Wreq.Session.get session mobileURL
-  -- print (loginPage ^. Wreq.responseBody)
 
   let
-    doc = XML.fromDocument (HTML.parseLBS (loginPage ^. Wreq.responseBody))
+    doc = responseToXML loginPage
     inputs = (doc XML.$.// XML.attributeIs "id" "login_form") >>= (XML.$.// XML.element "input")
     formUrl = (doc XML.$.// XML.attributeIs "id" "login_form" >=> XML.attribute "action")
 
     pairs :: [FormParam]
-    pairs = [   (Encoding.encodeUtf8 $ concat (XML.attribute "name"  cursor))
-             := (Encoding.encodeUtf8 $ concat (XML.attribute "value" cursor))
+    pairs = [   (encode $ concat (XML.attribute "name"  cursor))
+             := (encode $ concat (XML.attribute "value" cursor))
             | cursor <- inputs ]
 
     additionalPairs = [ "email" := username
@@ -252,24 +232,15 @@ login session (Authentication username password) = do
                       ]
 
     -- additionalPairs entries take precedence over pairs entries
-    -- payload = Aeson.toJSON (HashMap.fromList (pairs ++ additionalPairs))
     payload = pairs ++ additionalPairs
 
     opts = Wreq.defaults & headerOptions defaultHeader
 
-  case loginPage ^? Wreq.responseBody of
-    Just html -> writeFile "/home/sidharth/login_page.html" (fromShow html)
-    _ -> return ()
-
-  -- loginResponse <- Wreq.postWith opts loginURL payload
   loginResponse <- Wreq.Session.postWith opts session (textToString $ concat formUrl) payload
-
-  -- print (loginResponse ^? Wreq.responseBody)
-  -- print (payload)
-  -- print (formUrl)
 
   clientId <- Text.pack . flip Numeric.showHex "" <$> (Random.randomIO :: IO Int)
   now <- Time.getCurrentTime
+
   let
     startTime = timeToMilliseconds now
 
@@ -277,29 +248,20 @@ login session (Authentication username password) = do
     uid = (loginResponse ^? Wreq.responseCookie "c_user" . Wreq.cookieValue) >>= (readMay . Encoding.decodeUtf8)
     userChannel = (\s -> "p_" <> show s) <$> uid
 
-    doc2 = XML.fromDocument (HTML.parseLBS (loginResponse ^. Wreq.responseBody))
+    doc2 = responseToXML loginResponse
     fb_dtsg = concat $ doc2 XML.$.// (XML.attributeIs "name" "fb_dtsg" >=> XML.attribute "value")
 
-    mkTTStamp :: Text -> Text
-    mkTTStamp s = concat [show (Char.ord c) <> "2" | c <- s ^.. Text.unpacked . traverse ]
-
-    ttStamp = mkTTStamp fb_dtsg
-
-    revision :: Text
-    revision = "2246636"
+    ttStamp :: Text
+    ttStamp = concat [show (Char.ord c) <> "2" | c <- fb_dtsg ^.. Text.unpacked . traverse]
 
   print uid
   print ttStamp
   print (loginResponse ^? Wreq.responseCookie "c_user")
 
-  case loginResponse ^? Wreq.responseBody of
-    Just html -> writeFile "/home/sidharth/fb.html" (fromShow html)
-    _ -> return ()
-
   let
     payloadDefault :: Params
     payloadDefault =
-      [ ("__rev",   revision)
+      [ ("__rev",   "2246636")
       , ("__user",  show $ Maybe.fromJust uid)
       , ("__a",     "1")
       , ("ttstamp", ttStamp)
@@ -328,7 +290,7 @@ login session (Authentication username password) = do
       { session = session
       , requestCounter = 1
       , seq' = ""
-      , sessionUserAgent = Encoding.encodeUtf8 (head userAgents)
+      , sessionUserAgent = encode userAgent
       , prev = prev
       , tmpPrev = tmpPrev
       , lastSync = lastSync
