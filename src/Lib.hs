@@ -92,7 +92,6 @@ data FBSession = FBSession
   , prev :: Time.UTCTime
   , tmpPrev :: Time.UTCTime
   , lastSync :: Time.UTCTime
-  , form :: Params
   , payloadDefault :: Params
   , ttStamp :: Text
   , uid :: Integer
@@ -269,19 +268,6 @@ login session (Authentication username password) = do
           , ("fb_dtsg", fb_dtsg)
           ]
 
-        form :: Params
-        form =
-          [ ("channel"    , userChannel)
-          , ("partition"  , "-2")
-          , ("clientid"   , clientId)
-          , ("viewer_uid" , show uid)
-          , ("uid"        , show uid)
-          , ("state"      , "active")
-          , ("format"     , "json")
-          , ("idle"       , "0")
-          , ("cap"        , "8")
-          ]
-
         prev     = now
         tmpPrev  = now
         lastSync = now
@@ -294,7 +280,6 @@ login session (Authentication username password) = do
           , prev = prev
           , tmpPrev = tmpPrev
           , lastSync = lastSync
-          , form = form
           , payloadDefault = payloadDefault
           , ttStamp = ttStamp
           , uid = uid
