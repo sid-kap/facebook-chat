@@ -12,7 +12,7 @@ import qualified Control.Monad.State as State
 import Control.Monad.State (State, StateT)
 
 import qualified Data.Text.Encoding as Encoding
-import qualified Data.Text as Text (pack)
+import qualified Data.Text as Text
 import qualified Data.HashMap.Strict as HashMap
 import qualified System.Random as Random
 
@@ -219,7 +219,7 @@ login session (Authentication username password) = do
   let
     doc = responseToXML loginPage
     inputs = (doc XML.$.// XML.attributeIs "id" "login_form") >>= (XML.$.// XML.element "input")
-    formUrl = (doc XML.$.// XML.attributeIs "id" "login_form" >=> XML.attribute "action")
+    formUrl = doc XML.$.// XML.attributeIs "id" "login_form" >=> XML.attribute "action"
 
     pairs :: [FormParam]
     pairs = [   (encode $ concat (XML.attribute "name"  cursor))
@@ -238,32 +238,28 @@ login session (Authentication username password) = do
 
   loginResponse <- Wreq.Session.postWith opts session (textToString $ concat formUrl) payload
 
-  clientId <- Text.pack . flip Numeric.showHex "" <$> (Random.randomIO :: IO Int)
-  now <- Time.getCurrentTime
-
   let
-    startTime = timeToMilliseconds now
-
     uidMaybe :: Maybe Integer
     uidMaybe = (loginResponse ^? Wreq.responseCookie "c_user" . Wreq.cookieValue) >>= (readMay . Encoding.decodeUtf8)
 
   case uidMaybe of
     Nothing -> return Nothing
+
     Just uid -> do
+      clientId <- Text.pack . flip Numeric.showHex "" <$> (Random.randomIO :: IO Int)
+      now <- Time.getCurrentTime
       let
+        startTime = timeToMilliseconds now
+
         userChannel = "p_" <> show uid
 
-        doc2 = responseToXML loginResponse
-        fb_dtsg = concat $ doc2 XML.$.// (XML.attributeIs "name" "fb_dtsg" >=> XML.attribute "value")
+        doc' = responseToXML loginResponse
+
+        fb_dtsg = concat $ doc' XML.$.// (XML.attributeIs "name" "fb_dtsg" >=> XML.attribute "value")
 
         ttStamp :: Text
-        ttStamp = concat [show (Char.ord c) <> "2" | c <- fb_dtsg ^.. Text.unpacked . traverse]
+        ttStamp = concat [show (Char.ord c) <> "2" | c <- Text.unpack fb_dtsg]
 
-      print uid
-      print ttStamp
-      print (loginResponse ^? Wreq.responseCookie "c_user")
-
-      let
         payloadDefault :: Params
         payloadDefault =
           [ ("__rev",   "2246636")
@@ -290,7 +286,6 @@ login session (Authentication username password) = do
         tmpPrev  = now
         lastSync = now
 
-        -- todo throw/return an error if there is a failure here
         fbSession = FBSession
           { session = session
           , requestCounter = 1
@@ -307,5 +302,4 @@ login session (Authentication username password) = do
           , clientId = clientId
           }
 
-      -- TODO Somehow check if login was successful and throw/return the error?
       return (Just fbSession)
