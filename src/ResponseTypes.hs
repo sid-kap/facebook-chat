@@ -9,7 +9,7 @@ import GHC.Generics (Generic)
 
 import qualified Data.Aeson       as Aeson
 import qualified Data.Aeson.Types as Aeson
-import           Data.Aeson                (FromJSON, (.:))
+import           Data.Aeson                (FromJSON, (.:), (.:?))
 import qualified Data.Aeson.Lens  as Aeson
 
 import qualified Data.Time.Clock as Time
@@ -84,3 +84,46 @@ data Thread = Thread
   , custom_color :: Maybe Text
   , admin_ids :: [Text]
   } deriving (Show, Generic, Aeson.FromJSON)
+
+data Friend = Friend
+  { f_id :: Text
+  , f_name :: Text
+  , firstName :: Text
+  , vanity :: Text
+  , thumbSrc :: Text
+  , uri :: Text
+  , gender :: Int
+  , i18nGender :: Int
+  , additionalName :: Maybe Text
+  , f_type :: Text
+  , is_friend :: Bool
+  , mThumbSrcSmall :: Maybe Text
+  , mThumbSrcLarge :: Maybe Text
+  , dir :: Maybe Aeson.Value
+  , searchTokens :: [Text]
+  , alternateName :: Text
+  , is_nonfriend_messenger_contact :: Bool
+  } deriving (Show)
+
+instance FromJSON Friend where
+  parseJSON (Aeson.Object o) =
+        Friend
+    <$> o .: "id"
+    <*> o .: "name"
+    <*> o .: "firstName"
+    <*> o .: "vanity"
+    <*> o .: "thumbSrc"
+    <*> o .: "uri"
+    <*> o .: "gender"
+    <*> o .: "i18nGender"
+    <*> o .:? "additionalName"
+    <*> o .: "type"
+    <*> o .: "is_friend"
+    <*> o .: "mThumbSrcSmall"
+    <*> o .: "mThumbSrcLarge"
+    <*> o .: "dir"
+    <*> o .: "searchTokens"
+    <*> o .: "alternateName"
+    <*> o .: "is_nonfriend_messenger_contact"
+
+  parseJSON _ = empty

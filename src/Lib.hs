@@ -1,4 +1,5 @@
 {-# LANGUAGE NoImplicitPrelude, OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Lib
     where
@@ -7,6 +8,7 @@ import BasicPrelude
 import qualified Control.Applicative as Applicative
 import qualified Data.Char as Char
 import qualified Data.Maybe as Maybe
+import qualified Control.Exception.Base as Exception
 
 import qualified Control.Monad.State as State
 import Control.Monad.State (State, StateT)
@@ -20,7 +22,7 @@ import qualified Network.Wreq.Session as Wreq.Session
 import qualified Network.Wreq as Wreq
 import Network.Wreq (FormParam((:=)))
 
-import Lens.Family ((&), (.~), (^.), (^..), (^?), over)
+import Control.Lens ((&), (.~), (^.), (^..), (^?), (^?!), over, _Left)
 
 import qualified Numeric
 import qualified Data.Time.Clock as Time
@@ -37,24 +39,20 @@ import qualified Text.XML.Cursor as XML
 
 import qualified Data.ByteString.Lazy as ByteString.Lazy
 import qualified Data.ByteString.Lens as ByteString
+import qualified Data.ByteString      as ByteString
 import qualified Data.Text.Lens as Text
-
-import qualified Text.Parsec as Parsec
-import qualified Text.Parsec.Combinator as Parsec
-import qualified Text.ParserCombinators.Parsec.Char as Parsec
-import Text.Parsec.ByteString.Lazy (Parser)
 
 import qualified ResponseTypes as ResponseTypes
 
--- TODO make the type (LByteString) more explicit,
--- make more efficient (avoid intermediate string and the many string
--- type conversion), and possibly use something other than parsec
--- parseJson :: FromJSON a => Parser (Maybe a)
-parseJson :: Parser Text
-parseJson = do
-  Parsec.string "for (;;);"
-  jsonString <- Applicative.many Parsec.anyChar
-  return (Text.pack jsonString)
+newtype FBException = FBException String deriving Show
+instance Exception FBException
+
+parseJson :: LByteString -> Maybe LByteString
+parseJson str = if first == prefix
+                  then Just rest
+                  else Nothing
+  where prefix = "for (;;);"
+        (first, rest) = ByteString.Lazy.splitAt (ByteString.Lazy.length prefix) str
 
 encode = Encoding.encodeUtf8
 
@@ -140,7 +138,7 @@ post' :: String -> Params -> StateT FBSession IO (Wreq.Response LByteString)
 post' url params = do
   fbState <- State.get
   payload <- generatePayload params
-  State.liftIO $ print payload
+  -- State.liftIO $ print payload
   State.liftIO $ Wreq.Session.post (session fbState) url (map paramToFormParam payload)
 
   where
@@ -173,34 +171,74 @@ generatePayload params = do
   State.put $ fbState { requestCounter = count' }
   return params'
 
+getUserId :: Text -> StateT FBSession IO (Wreq.Response LByteString)
+getUserId query = do
+  uid_ <- uid <$> State.get
+  let
+    form =
+      [ ("value", query)
+      , ("viewer", show uid_)
+      , ("rsp", "search")
+      , ("context", "search")
+      , ("path", "/home.php")
+      , ("request_id", "1304")
+      ]
+  get' "https://www.facebook.com/ajax/typeahead/search.php" form
+
 -- TODO accept start/end arguments
-getThreadList :: StateT FBSession IO (Wreq.Response LByteString)
-getThreadList = do
+getThreadList :: Int -> Int -> StateT FBSession IO (Wreq.Response LByteString)
+getThreadList start end = do
   now <- liftIO Time.getCurrentTime
   let
     timestamp = timeToMilliseconds now
 
     form =
       [ ("client",        client)
-      , ("inbox[offset]", "0")
-      , ("inbox[limit]",  "20")
+      , ("inbox[offset]", show start)
+      , ("inbox[limit]",  show (end - start))
       ]
 
   r <- post' threadsURL form
 
   let
     body = r ^? Wreq.responseBody
-    jsonString = (eitherToMaybe . Parsec.parse parseJson "foo") =<< body
+    jsonString = body >>= parseJson
 
     response :: Either String (ResponseTypes.Response [ResponseTypes.Thread])
-    response = Aeson.parseEither (ResponseTypes.parseResponse "threads") =<< Aeson.eitherDecodeStrict =<< (encode <$> (maybeToEither jsonString))
+    response = maybeToEither jsonString
+      >>= Aeson.eitherDecode
+      >>= Aeson.parseEither (ResponseTypes.parseResponse "threads")
 
-  print response
+  -- print response
 
   return r
 
+getFriendsList :: StateT FBSession IO (HashMap Text ResponseTypes.Friend)
+getFriendsList = do
+  uid_ <- uid <$> State.get
+  let form = [("viewer", show uid_)]
+
+  response <- post' "https://www.facebook.com/chat/user_info_all" form
+
+  let
+    body = response ^. Wreq.responseBody
+
+    jsonString = parseJson body
+
+    res = jsonString
+      >>= (Aeson.decode :: LByteString -> Maybe Aeson.Value)
+      >>= (^? Aeson.key "payload")
+      >>= Aeson.parseMaybe Aeson.parseJSON
+
+  case res of
+    Nothing -> Exception.throw (FBException "error")
+    Just r -> return r
+
 eitherToMaybe :: Either a b -> Maybe b
 eitherToMaybe = either (const Nothing) Just
+
+getEither (Left err)  = Exception.throw (FBException err)
+getEither (Right r) = r
 
 maybeToEither :: Maybe b -> Either String b
 maybeToEither = maybe (Left "was Maybe") Right
