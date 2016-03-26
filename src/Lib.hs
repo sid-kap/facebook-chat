@@ -24,7 +24,8 @@ import qualified Network.Wreq.Session as Wreq.Session
 import qualified Network.Wreq as Wreq
 import Network.Wreq (FormParam((:=)))
 
-import Control.Lens ((&), (.~), (^.), (^..), (^?), (^?!), over, _Left)
+import Control.Lens ((&), (.~), (^.), (^..), (^?!), over, _Left)
+import qualified Control.Lens as Lens ((^?))
 
 import qualified Numeric
 import qualified Data.Time.Clock as Time
@@ -52,11 +53,13 @@ newtype FBException = FBException String deriving Show
 instance Exception FBException
 
 parseJson :: Catch.MonadThrow m => LByteString -> m Aeson.Value
-parseJson str = if first == prefix
-                  then decode rest
-                  else Catch.throwM (FBException ("expected" <> textToString (show prefix) <> ", but found " <> textToString (show rest)))
-  where prefix = "for (;;);"
-        (first, rest) = ByteString.Lazy.splitAt (ByteString.Lazy.length prefix) str
+parseJson str =
+  if first == prefix
+    then decode rest
+    else Catch.throwM (FBException ("expected" <> textToString (show prefix) <> ", but found " <> textToString (show rest)))
+  where
+    prefix = "for (;;);"
+    (first, rest) = ByteString.Lazy.splitAt (ByteString.Lazy.length prefix) str
 
 encode = Encoding.encodeUtf8
 
@@ -211,10 +214,13 @@ getFriendsList = do
   response <- post' "https://www.facebook.com/chat/user_info_all" form
 
   json :: Aeson.Value <- parseJson (response ^. Wreq.responseBody)
-  res_ <- maybeToError (json ^? Aeson.key "payload")
+  res_ <- json ^? Aeson.key "payload"
   res <- parse Aeson.parseJSON res_
 
   return res
+
+x ^? lens = maybeToError (x Lens.^? lens)
+infixl 8 ^?
 
 getOnlineUsers :: StateT FBSession IO (HashMap ResponseTypes.UserId ResponseTypes.Status, HashMap ResponseTypes.UserId Integer)
 getOnlineUsers = do
@@ -226,12 +232,12 @@ getOnlineUsers = do
   response <- post' "https://www.facebook.com/ajax/chat/buddy_list.php" form
 
   json :: Aeson.Value <- parseJson (response ^. Wreq.responseBody)
-  buddyList <- maybeToError (json ^? Aeson.key "payload" . Aeson.key "buddy_list")
+  buddyList <- json ^? Aeson.key "payload" . Aeson.key "buddy_list"
 
-  nowAvailableList <- maybeToError (buddyList ^? Aeson.key "nowAvailableList")
+  nowAvailableList <- buddyList ^? Aeson.key "nowAvailableList"
   nowAvailableList' <- parse Aeson.parseJSON (over Aeson.members (^?! Aeson.key "a") nowAvailableList)
 
-  lastActiveTimes <- maybeToError (buddyList ^? Aeson.key "last_active_times" >>= Aeson.parseMaybe Aeson.parseJSON)
+  lastActiveTimes <- buddyList ^? Aeson.key "last_active_times" >>= parse Aeson.parseJSON
 
   return (nowAvailableList', lastActiveTimes)
 
