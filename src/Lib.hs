@@ -140,14 +140,6 @@ sessionOpts :: FBSession -> Wreq.Options
 sessionOpts session =
   Wreq.defaults & Wreq.cookies .~ (Just (Lib.cookieJar session))
 
-data Header = Header
-  { contentType :: ByteString
-  , referer :: ByteString
-  , origin :: ByteString
-  , headerUserAgent :: ByteString
-  , connection :: ByteString
-  }
-
 data Payload = Payload
   { rev :: Text
   , user :: Text
@@ -158,23 +150,17 @@ data Payload = Payload
 
 type Params = [(Text, Text)]
 
-defaultHeader :: Header
-defaultHeader = Header
-  { contentType = "application/x-www-form-urlencoded"
-  , referer = encode baseURL
-  , origin = encode baseURL
-  , headerUserAgent = encode userAgent
-  , connection = "keep-alive"
-  }
+data Message = Message Text (Maybe Attachment)
+data Attachment = Sticker Text | File FilePath | URL Text
 
-headerOptions :: Header -> Wreq.Options -> Wreq.Options
-headerOptions h = foldr1 (.) updates
+headerOptions :: Wreq.Options -> Wreq.Options
+headerOptions = foldr1 (.) updates
   where
     updates :: [Wreq.Options -> Wreq.Options]
-    updates = [ Wreq.header "Referer"      .~ [referer h]
-              , Wreq.header "Origin"       .~ [origin h]
-              , Wreq.header "User-Agent"   .~ [headerUserAgent h]
-              , Wreq.header "Connection"   .~ [connection h]
+    updates = [ Wreq.header "Referer"      .~ [encode baseURL]
+              , Wreq.header "Origin"       .~ [encode baseURL]
+              , Wreq.header "User-Agent"   .~ [encode userAgent]
+              , Wreq.header "Connection"   .~ ["keep-alive"]
               ]
 
 post' :: String -> Params -> StateT FBSession IO (Wreq.Response LByteString)
@@ -343,7 +329,7 @@ login (Authentication username password) = do
     -- additionalPairs entries take precedence over pairs entries
     payload = pairs ++ additionalPairs
 
-    opts = Wreq.defaults & headerOptions defaultHeader
+    opts = Wreq.defaults & headerOptions
 
   loginResponse <- Wreq.postWith opts (textToString $ concat formUrl) payload
 
