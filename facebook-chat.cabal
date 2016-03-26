@@ -21,6 +21,7 @@ library
                      , bytestring
 
                      , wreq
+                     , http-client
                      , lens
                      , aeson
                      , lens-aeson
@@ -42,6 +43,7 @@ executable facebook-chat-exe
                      , wreq
 
                      , facebook-chat
+                     , colour
   default-language:    Haskell2010
 
 test-suite facebook-chat-test

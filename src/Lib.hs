@@ -20,9 +20,10 @@ import qualified Data.Text as Text
 import qualified Data.HashMap.Strict as HashMap
 import qualified System.Random as Random
 
-import qualified Network.Wreq.Session as Wreq.Session
+-- import qualified Network.Wreq.Session as Wreq.Session
 import qualified Network.Wreq as Wreq
 import Network.Wreq (FormParam((:=)))
+import qualified Network.HTTP.Client as HTTP
 
 import Control.Lens ((&), (.~), (^.), (^..), (^?!), over, _Left)
 import qualified Control.Lens as Lens ((^?))
@@ -122,7 +123,7 @@ data Authentication = Authentication
   }
 
 data FBSession = FBSession
-  { session :: Wreq.Session.Session
+  { cookieJar :: HTTP.CookieJar
   , requestCounter :: Int
   , seq' :: Text
   , sessionUserAgent :: ByteString
@@ -135,6 +136,10 @@ data FBSession = FBSession
   , userChannel :: Text
   , clientId :: Text
   }
+
+sessionOpts :: FBSession -> Wreq.Options
+sessionOpts session =
+  Wreq.defaults & Wreq.cookies .~ (Just (Lib.cookieJar session))
 
 data Header = Header
   { contentType :: ByteString
@@ -177,7 +182,7 @@ post' :: String -> Params -> StateT FBSession IO (Wreq.Response LByteString)
 post' url params = do
   fbState <- State.get
   payload <- generatePayload params
-  State.liftIO $ Wreq.Session.post (session fbState) url (map paramToFormParam payload)
+  State.liftIO $ Wreq.postWith (sessionOpts fbState) url (map paramToFormParam payload)
 
   where
     paramToFormParam :: (Text, Text) -> FormParam
@@ -187,8 +192,8 @@ get' :: String -> Params -> StateT FBSession IO (Wreq.Response LByteString)
 get' url params = do
   fbState <- State.get
   payload <- generatePayload params
-  let opts = Wreq.defaults & foldr1 (.) (map toParam payload)
-  State.liftIO $ Wreq.Session.getWith opts (session fbState) url
+  let opts = (sessionOpts fbState) & foldr1 (.) (map toParam payload)
+  State.liftIO $ Wreq.getWith opts url
   where
     toParam (name, value) = Wreq.param name .~ [value]
 
@@ -255,6 +260,13 @@ getFriendsList = do
 
   return res
 
+getUserInfo :: [ResponseTypes.UserId] -> StateT FBSession IO (HashMap ResponseTypes.UserId ResponseTypes.Friend)
+getUserInfo userIds = do
+  let form = [ ("ids[" <> show i <> "]", v) | (i,v) <- zip [1..] userIds ]
+  response <- post' "https://www.facebook.com/chat/user_info/" form
+  json <- parseJson (response ^. Wreq.responseBody) >>= (^? Aeson.key "payload" . Aeson.key "profiles")
+  parseValue json
+
 getOnlineUsers :: StateT FBSession IO (HashMap ResponseTypes.UserId ResponseTypes.Status, HashMap ResponseTypes.UserId Integer)
 getOnlineUsers = do
   uid_ <- uid <$> State.get
@@ -305,14 +317,14 @@ setThreadColor color threadID = do
              , ("thread_or_other_fbid", threadID)
              ]
   response <- post' "https://www.messenger.com/messaging/save_thread_color/?source=thread_settings&dpr=1" form
-  err <- parseJson (response ^. Wreq.responseBody) >>= (^? Aeson.key "error")
-  case err of
-    Aeson.Number 1357031 -> throwIO (FBException "Trying to change colors of a chat that doesn't exist. Have at least one message in the thread before trying to change the colors.")
-    _ -> return ()
+  response <- parseJson (response ^. Wreq.responseBody)
+  case response ^? Aeson.key "errorSummary" of
+    Just (Aeson.String err) -> throwIO (FBException (textToString err))
+    Nothing -> return ()
 
-login :: Wreq.Session.Session -> Authentication -> IO (Maybe FBSession)
-login session (Authentication username password) = do
-  loginPage <- Wreq.Session.get session mobileURL
+login :: Authentication -> IO (Maybe FBSession)
+login (Authentication username password) = do
+  loginPage <- Wreq.getWith Wreq.defaults mobileURL
 
   let
     doc = responseToXML loginPage
@@ -334,7 +346,7 @@ login session (Authentication username password) = do
 
     opts = Wreq.defaults & headerOptions defaultHeader
 
-  loginResponse <- Wreq.Session.postWith opts session (textToString $ concat formUrl) payload
+  loginResponse <- Wreq.postWith opts (textToString $ concat formUrl) payload
 
   let
     uidMaybe :: Maybe Integer
@@ -371,8 +383,19 @@ login session (Authentication username password) = do
         tmpPrev  = now
         lastSync = now
 
+        cookies :: [HTTP.Cookie]
+        cookies = HTTP.destroyCookieJar (loginResponse ^. Wreq.responseCookieJar)
+
+        messengerCookies  :: [HTTP.Cookie]
+        messengerCookies =
+          map (\c -> c { HTTP.cookie_domain = "messenger.com" })
+          $ filter (\c -> HTTP.cookie_domain c == "facebook.com") cookies
+
+        newCookieJar :: HTTP.CookieJar
+        newCookieJar = HTTP.createCookieJar (cookies ++ messengerCookies)
+
         fbSession = FBSession
-          { session = session
+          { cookieJar = newCookieJar
           , requestCounter = 1
           , seq' = ""
           , sessionUserAgent = encode userAgent
