@@ -13,7 +13,6 @@ import qualified Control.Exception.Base as Exception
 
 import qualified Control.Monad.State as State
 import Control.Monad.State (State, StateT)
--- import qualified Control.Monad.Error.Class as Error
 import qualified Control.Monad.Catch as Catch
 
 import qualified Data.Text.Encoding as Encoding
@@ -190,12 +189,9 @@ getUserId query = do
   get' "https://www.facebook.com/ajax/typeahead/search.php" form
 
 -- TODO accept start/end arguments
-getThreadList :: Int -> Int -> StateT FBSession IO (Wreq.Response LByteString)
+getThreadList :: Int -> Int -> StateT FBSession IO (ResponseTypes.Response [ResponseTypes.Thread])
 getThreadList start end = do
-  now <- liftIO Time.getCurrentTime
   let
-    timestamp = timeToMilliseconds now
-
     form =
       [ ("client",        client)
       , ("inbox[offset]", show start)
@@ -203,14 +199,9 @@ getThreadList start end = do
       ]
 
   r <- post' threadsURL form
-  jsonString <- parseJson (r ^. Wreq.responseBody)
+  json <- parseJson (r ^. Wreq.responseBody) >>= decode
 
-  let
-    response :: Either String (ResponseTypes.Response [ResponseTypes.Thread])
-    response = Aeson.eitherDecode jsonString
-      >>= Aeson.parseEither (ResponseTypes.parseResponse "threads")
-
-  return r
+  parse (ResponseTypes.parseResponse "threads") json
 
 getFriendsList :: StateT FBSession IO (HashMap Text ResponseTypes.Friend)
 getFriendsList = do
@@ -219,10 +210,9 @@ getFriendsList = do
 
   response <- post' "https://www.facebook.com/chat/user_info_all" form
 
-  jsonString <- parseJson (response ^. Wreq.responseBody)
-  decoded :: Aeson.Value <- maybeToError $ Aeson.decode jsonString
+  decoded :: Aeson.Value <- parseJson (response ^. Wreq.responseBody) >>= decode
   res_ <- maybeToError (decoded ^? Aeson.key "payload")
-  res <- eitherToError (Aeson.parseEither Aeson.parseJSON res_)
+  res <- parse Aeson.parseJSON res_
 
   return res
 
@@ -235,11 +225,11 @@ getOnlineUsers = do
              , ("get_now_available_list", "true") ]
   response <- post' "https://www.facebook.com/ajax/chat/buddy_list.php" form
 
-  json :: Aeson.Value <- maybeToError $ parseJson (response ^. Wreq.responseBody) >>= Aeson.decode
+  json :: Aeson.Value <- parseJson (response ^. Wreq.responseBody) >>= decode
   buddyList <- maybeToError (json ^? Aeson.key "payload" . Aeson.key "buddy_list")
 
   nowAvailableList <- maybeToError (buddyList ^? Aeson.key "nowAvailableList")
-  nowAvailableList' <- eitherToError (Aeson.parseEither Aeson.parseJSON (over Aeson.members (^?! Aeson.key "a") nowAvailableList))
+  nowAvailableList' <- parse Aeson.parseJSON (over Aeson.members (^?! Aeson.key "a") nowAvailableList)
 
   lastActiveTimes <- maybeToError (buddyList ^? Aeson.key "last_active_times" >>= Aeson.parseMaybe Aeson.parseJSON)
 
@@ -252,12 +242,16 @@ getOnlineUsers = do
 -- getEither (Right r) = r
 
 eitherToError :: Catch.MonadThrow m => Either String b -> m b
-eitherToError (Left err) = Catch.throwM (FBException err)
-eitherToError (Right b)  = return b
+eitherToError = either (Catch.throwM . FBException) return
 
 maybeToError :: Catch.MonadThrow m => Maybe b -> m b
-maybeToError Nothing  = Catch.throwM (FBException "was Maybe")
-maybeToError (Just b) = return b
+maybeToError = maybe (Catch.throwM (FBException "was Maybe")) return
+
+decode :: (FromJSON a, Catch.MonadThrow m) => LByteString -> m a
+decode = eitherToError . Aeson.eitherDecode
+
+parse :: (FromJSON a, Catch.MonadThrow m) => (a -> Aeson.Parser b) -> a -> m b
+parse f = eitherToError . (Aeson.parseEither f)
 
 -- eitherToError :: Error.MonadError FBException m => Either String b -> m b
 -- eitherToError (Left err) = Error.throwError (FBException err)

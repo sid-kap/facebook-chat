@@ -21,7 +21,6 @@ library
                      , bytestring
 
                      , wreq
-                     , lens-family-core
                      , lens
                      , aeson
                      , lens-aeson
