@@ -299,6 +299,17 @@ sendTypingIndicator threadId start = do
   post' "https://www.facebook.com/ajax/messaging/typ.php" form
   return ()
 
+setThreadColor :: Text -> Text -> StateT FBSession IO ()
+setThreadColor color threadID = do
+  let form = [ ("color_choice", color)
+             , ("thread_or_other_fbid", threadID)
+             ]
+  response <- post' "https://www.messenger.com/messaging/save_thread_color/?source=thread_settings&dpr=1" form
+  err <- parseJson (response ^. Wreq.responseBody) >>= (^? Aeson.key "error")
+  case err of
+    Aeson.Number 1357031 -> throwIO (FBException "Trying to change colors of a chat that doesn't exist. Have at least one message in the thread before trying to change the colors.")
+    _ -> return ()
+
 login :: Wreq.Session.Session -> Authentication -> IO (Maybe FBSession)
 login session (Authentication username password) = do
   loginPage <- Wreq.Session.get session mobileURL
