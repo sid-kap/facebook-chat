@@ -287,6 +287,18 @@ searchForThread query = do
     >>= (^? Aeson.key "payload" . Aeson.key "mercury_payload" . Aeson.key "threads")
     >>= parseValue
 
+-- start is True to start typing, False to stop typing
+sendTypingIndicator :: Text -> Bool -> StateT FBSession IO ()
+sendTypingIndicator threadId start = do
+  let isUser = False -- TODO check isUser, or rely on user to send this
+      form = [ ("typ", show (if start then 1 else 0)) -- 1 to start typing, 0 to end typing
+             , ("to", if isUser then threadId else "")
+             , ("source", "mercury-chat")
+             , ("thread", threadId)
+             ]
+  post' "https://www.facebook.com/ajax/messaging/typ.php" form
+  return ()
+
 login :: Wreq.Session.Session -> Authentication -> IO (Maybe FBSession)
 login session (Authentication username password) = do
   loginPage <- Wreq.Session.get session mobileURL
