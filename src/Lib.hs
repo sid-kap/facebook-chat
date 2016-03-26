@@ -20,7 +20,6 @@ import qualified Data.Text as Text
 import qualified Data.HashMap.Strict as HashMap
 import qualified System.Random as Random
 
--- import qualified Network.Wreq.Session as Wreq.Session
 import qualified Network.Wreq as Wreq
 import Network.Wreq (FormParam((:=)))
 import qualified Network.HTTP.Client as HTTP
