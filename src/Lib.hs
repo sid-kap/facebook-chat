@@ -153,16 +153,6 @@ type Params = [(Text, Text)]
 data Message = Message Text (Maybe Attachment)
 data Attachment = Sticker Text | File FilePath | URL Text
 
-headerOptions :: Wreq.Options -> Wreq.Options
-headerOptions = foldr1 (.) updates
-  where
-    updates :: [Wreq.Options -> Wreq.Options]
-    updates = [ Wreq.header "Referer"      .~ [encode baseURL]
-              , Wreq.header "Origin"       .~ [encode baseURL]
-              , Wreq.header "User-Agent"   .~ [encode userAgent]
-              , Wreq.header "Connection"   .~ ["keep-alive"]
-              ]
-
 post' :: String -> Params -> StateT FBSession IO (Wreq.Response LByteString)
 post' url params = do
   fbState <- State.get
@@ -328,6 +318,16 @@ login (Authentication username password) = do
 
     -- additionalPairs entries take precedence over pairs entries
     payload = pairs ++ additionalPairs
+
+    headerOptions :: Wreq.Options -> Wreq.Options
+    headerOptions = foldr1 (.) updates
+      where
+        updates :: [Wreq.Options -> Wreq.Options]
+        updates = [ Wreq.header "Referer"      .~ [encode baseURL]
+                  , Wreq.header "Origin"       .~ [encode baseURL]
+                  , Wreq.header "User-Agent"   .~ [encode userAgent]
+                  , Wreq.header "Connection"   .~ ["keep-alive"]
+                  ]
 
     opts = Wreq.defaults & headerOptions
 
