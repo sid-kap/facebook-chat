@@ -23,6 +23,6 @@ action = do
   getThreadList 0 20
   uid <- getUserId "srishti"
   -- liftIO $ print (uid ^. Wreq.responseBody)
-  friends <- getFriendsList
-  liftIO $ print friends
+  -- liftIO (getFriendsList >>= friends)
+  getOnlineUsers >>= (liftIO . print)
   return ()

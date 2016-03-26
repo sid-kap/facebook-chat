@@ -1,5 +1,6 @@
 {-# LANGUAGE NoImplicitPrelude, OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE FlexibleContexts #-}
 
 module Lib
     where
@@ -12,6 +13,8 @@ import qualified Control.Exception.Base as Exception
 
 import qualified Control.Monad.State as State
 import Control.Monad.State (State, StateT)
+-- import qualified Control.Monad.Error.Class as Error
+import qualified Control.Monad.Catch as Catch
 
 import qualified Data.Text.Encoding as Encoding
 import qualified Data.Text as Text
@@ -44,13 +47,15 @@ import qualified Data.Text.Lens as Text
 
 import qualified ResponseTypes as ResponseTypes
 
+import Debug.Trace
+
 newtype FBException = FBException String deriving Show
 instance Exception FBException
 
-parseJson :: LByteString -> Maybe LByteString
+parseJson :: Catch.MonadThrow m => LByteString -> m LByteString
 parseJson str = if first == prefix
-                  then Just rest
-                  else Nothing
+                  then return rest
+                  else Catch.throwM (FBException ("expected" <> textToString (show prefix) <> ", but found " <> textToString (show rest)))
   where prefix = "for (;;);"
         (first, rest) = ByteString.Lazy.splitAt (ByteString.Lazy.length prefix) str
 
@@ -138,7 +143,6 @@ post' :: String -> Params -> StateT FBSession IO (Wreq.Response LByteString)
 post' url params = do
   fbState <- State.get
   payload <- generatePayload params
-  -- State.liftIO $ print payload
   State.liftIO $ Wreq.Session.post (session fbState) url (map paramToFormParam payload)
 
   where
@@ -199,17 +203,12 @@ getThreadList start end = do
       ]
 
   r <- post' threadsURL form
+  jsonString <- parseJson (r ^. Wreq.responseBody)
 
   let
-    body = r ^? Wreq.responseBody
-    jsonString = body >>= parseJson
-
     response :: Either String (ResponseTypes.Response [ResponseTypes.Thread])
-    response = maybeToEither jsonString
-      >>= Aeson.eitherDecode
+    response = Aeson.eitherDecode jsonString
       >>= Aeson.parseEither (ResponseTypes.parseResponse "threads")
-
-  -- print response
 
   return r
 
@@ -220,25 +219,49 @@ getFriendsList = do
 
   response <- post' "https://www.facebook.com/chat/user_info_all" form
 
-  let
-    body = response ^. Wreq.responseBody
+  jsonString <- parseJson (response ^. Wreq.responseBody)
+  decoded :: Aeson.Value <- maybeToError $ Aeson.decode jsonString
+  res_ <- maybeToError (decoded ^? Aeson.key "payload")
+  res <- eitherToError (Aeson.parseEither Aeson.parseJSON res_)
 
-    jsonString = parseJson body
+  return res
 
-    res = jsonString
-      >>= (Aeson.decode :: LByteString -> Maybe Aeson.Value)
-      >>= (^? Aeson.key "payload")
-      >>= Aeson.parseMaybe Aeson.parseJSON
+getOnlineUsers :: StateT FBSession IO (HashMap ResponseTypes.UserId ResponseTypes.Status, HashMap ResponseTypes.UserId Integer)
+getOnlineUsers = do
+  uid_ <- uid <$> State.get
+  -- TODO specify this using Bool type instead of strings
+  let form = [ ("user", show uid_)
+             , ("fetch_mobile", "false")
+             , ("get_now_available_list", "true") ]
+  response <- post' "https://www.facebook.com/ajax/chat/buddy_list.php" form
 
-  case res of
-    Nothing -> Exception.throw (FBException "error")
-    Just r -> return r
+  json :: Aeson.Value <- maybeToError $ parseJson (response ^. Wreq.responseBody) >>= Aeson.decode
+  buddyList <- maybeToError (json ^? Aeson.key "payload" . Aeson.key "buddy_list")
 
-eitherToMaybe :: Either a b -> Maybe b
-eitherToMaybe = either (const Nothing) Just
+  nowAvailableList <- maybeToError (buddyList ^? Aeson.key "nowAvailableList")
+  nowAvailableList' <- eitherToError (Aeson.parseEither Aeson.parseJSON (over Aeson.members (^?! Aeson.key "a") nowAvailableList))
 
-getEither (Left err)  = Exception.throw (FBException err)
-getEither (Right r) = r
+  lastActiveTimes <- maybeToError (buddyList ^? Aeson.key "last_active_times" >>= Aeson.parseMaybe Aeson.parseJSON)
+
+  return (nowAvailableList', lastActiveTimes)
+
+-- eitherToMaybe :: Either a b -> Maybe b
+-- eitherToMaybe = either (const Nothing) Just
+
+-- getEither (Left err)  = Exception.throw (FBException err)
+-- getEither (Right r) = r
+
+eitherToError :: Catch.MonadThrow m => Either String b -> m b
+eitherToError (Left err) = Catch.throwM (FBException err)
+eitherToError (Right b)  = return b
+
+maybeToError :: Catch.MonadThrow m => Maybe b -> m b
+maybeToError Nothing  = Catch.throwM (FBException "was Maybe")
+maybeToError (Just b) = return b
+
+-- eitherToError :: Error.MonadError FBException m => Either String b -> m b
+-- eitherToError (Left err) = Error.throwError (FBException err)
+-- eitherToError (Right b)  = return b
 
 maybeToEither :: Maybe b -> Either String b
 maybeToEither = maybe (Left "was Maybe") Right

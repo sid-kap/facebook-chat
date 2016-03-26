@@ -29,12 +29,11 @@ data Response a = Response
 -- TODO get rid of this orphan instance
 instance FromJSON (Time.NominalDiffTime) where
   parseJSON (Aeson.Number n) = return (realToFrac (Scientific.toRealFloat (n / 1000)))
-  parseJSON invalid = Aeson.typeMismatch "NominalDiffTime" invalid
+  parseJSON _ = empty
 
 parseResponse :: FromJSON a => Text -> (Aeson.Value -> Aeson.Parser (Response a))
 parseResponse name = parser
   where
-    parser (Aeson.Array _) = empty -- fail on array
     parser (Aeson.Object o) =
           Response
       <$> o .: "__ar"
@@ -42,6 +41,28 @@ parseResponse name = parser
       <*> o .: "bootloadable"
       <*> o .: "ixData"
       <*> o .: "lid"
+    parser _ = empty
+
+data Gender = Unknown
+            | Female_Singular
+            | Male_Singular
+            | Female_Singular_Guess
+            | Male_Singular_Guess
+            | Mixed
+            | Neuter_Singular
+            | Unknown_Singular
+            | Female_Plural
+            | Male_Plural
+            | Neuter_Plural
+            | Unknown_Plural
+            deriving (Show, Enum)
+
+instance FromJSON Gender where
+  parseJSON (Aeson.Number n) =
+    case Scientific.floatingOrInteger n of
+      Right n -> return (toEnum n)
+      Left  _ -> empty
+  parseJSON _ = empty
 
 data Thread = Thread
   { thread_id :: Text
@@ -92,7 +113,7 @@ data Friend = Friend
   , vanity :: Text
   , thumbSrc :: Text
   , uri :: Text
-  , gender :: Int
+  , gender :: Gender
   , i18nGender :: Int
   , additionalName :: Maybe Text
   , f_type :: Text
@@ -127,3 +148,15 @@ instance FromJSON Friend where
     <*> o .: "is_nonfriend_messenger_contact"
 
   parseJSON _ = empty
+
+data Status = Offline | Idle | Active | Mobile
+            deriving (Show, Enum)
+
+instance FromJSON Status where
+  parseJSON (Aeson.Number n) =
+    case Scientific.floatingOrInteger n of
+      Right n -> return (toEnum n)
+      Left  _ -> empty
+  parseJSON _ = empty
+
+type UserId = Text
