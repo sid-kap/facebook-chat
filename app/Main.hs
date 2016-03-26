@@ -21,8 +21,9 @@ main = Wreq.Session.withSession $ \session -> do
 
 action = do
   getThreadList 0 20
-  uid <- getUserId "srishti"
+  -- uid <- getUserId "srishti"
   -- liftIO $ print (uid ^. Wreq.responseBody)
   -- liftIO (getFriendsList >>= friends)
-  getOnlineUsers >>= (liftIO . print)
+  -- getOnlineUsers >>= (liftIO . print)
+  searchForThread "food" >>= (liftIO . print)
   return ()

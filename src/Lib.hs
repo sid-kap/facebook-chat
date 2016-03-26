@@ -12,7 +12,7 @@ import qualified Data.Maybe as Maybe
 import qualified Control.Exception.Base as Exception
 
 import qualified Control.Monad.State as State
-import Control.Monad.State (State, StateT)
+import Control.Monad.State (State, StateT, MonadState)
 import qualified Control.Monad.Catch as Catch
 
 import qualified Data.Text.Encoding as Encoding
@@ -52,6 +52,13 @@ import Debug.Trace
 newtype FBException = FBException String deriving Show
 instance Exception FBException
 
+-----------------------------------------------------------
+-- helper functions
+-----------------------------------------------------------
+
+x ^? lens = maybeToError (x Lens.^? lens)
+infixl 8 ^?
+
 parseJson :: Catch.MonadThrow m => LByteString -> m Aeson.Value
 parseJson str =
   if first == prefix
@@ -62,6 +69,31 @@ parseJson str =
     (first, rest) = ByteString.Lazy.splitAt (ByteString.Lazy.length prefix) str
 
 encode = Encoding.encodeUtf8
+
+eitherToError :: Catch.MonadThrow m => Either String b -> m b
+eitherToError = either (Catch.throwM . FBException) return
+
+maybeToError :: Catch.MonadThrow m => Maybe b -> m b
+maybeToError = maybe (Catch.throwM (FBException "was Maybe")) return
+
+decode :: (FromJSON a, Catch.MonadThrow m) => LByteString -> m a
+decode = eitherToError . Aeson.eitherDecode
+
+parse :: (FromJSON a, Catch.MonadThrow m) => (a -> Aeson.Parser b) -> a -> m b
+parse f = eitherToError . (Aeson.parseEither f)
+
+parseValue :: (FromJSON a, Catch.MonadThrow m) => Aeson.Value -> m a
+parseValue = parse Aeson.parseJSON
+
+timeToMilliseconds :: Integral a => Time.UTCTime -> a
+timeToMilliseconds time = round ((Time.POSIX.utcTimeToPOSIXSeconds time) * 1000)
+
+responseToXML :: Wreq.Response LByteString -> XML.Cursor
+responseToXML response = (XML.fromDocument . HTML.parseLBS) (response ^. Wreq.responseBody)
+
+-----------------------------------------------------------
+-- API helper functions
+-----------------------------------------------------------
 
 -- loginURL, searchURL, sendURL, threadsURL, threadSyncURL, messagesURL, readStatusURL, deliveredURL, markSeenURL, baseURL, mobileURL, stickyURL, pingURL :: Text
 loginURL      = "https://m.facebook.com/login.php?login_attempt=1"
@@ -120,6 +152,8 @@ data Payload = Payload
   , fb_dtsg :: Text
   }
 
+type Params = [(Text, Text)]
+
 defaultHeader :: Header
 defaultHeader = Header
   { contentType = "application/x-www-form-urlencoded"
@@ -138,8 +172,6 @@ headerOptions h = foldr1 (.) updates
               , Wreq.header "User-Agent"   .~ [headerUserAgent h]
               , Wreq.header "Connection"   .~ [connection h]
               ]
-
-type Params = [(Text, Text)]
 
 post' :: String -> Params -> StateT FBSession IO (Wreq.Response LByteString)
 post' url params = do
@@ -162,7 +194,7 @@ get' url params = do
 
 -- Not sure that this function should have side effects (incrementing the
 -- request counter). Maybe this should be done in get' and post'.
-generatePayload :: Monad m => Params -> StateT FBSession m Params
+generatePayload :: MonadState FBSession m => Params -> m Params
 generatePayload params = do
   fbState <- State.get
   let count' = (requestCounter fbState) + 1
@@ -176,6 +208,10 @@ generatePayload params = do
 
   State.put $ fbState { requestCounter = count' }
   return params'
+
+-----------------------------------------------------------
+-- API functions
+-----------------------------------------------------------
 
 getUserId :: Text -> StateT FBSession IO (Wreq.Response LByteString)
 getUserId query = do
@@ -215,12 +251,9 @@ getFriendsList = do
 
   json :: Aeson.Value <- parseJson (response ^. Wreq.responseBody)
   res_ <- json ^? Aeson.key "payload"
-  res <- parse Aeson.parseJSON res_
+  res <- parseValue res_
 
   return res
-
-x ^? lens = maybeToError (x Lens.^? lens)
-infixl 8 ^?
 
 getOnlineUsers :: StateT FBSession IO (HashMap ResponseTypes.UserId ResponseTypes.Status, HashMap ResponseTypes.UserId Integer)
 getOnlineUsers = do
@@ -235,29 +268,24 @@ getOnlineUsers = do
   buddyList <- json ^? Aeson.key "payload" . Aeson.key "buddy_list"
 
   nowAvailableList <- buddyList ^? Aeson.key "nowAvailableList"
-  nowAvailableList' <- parse Aeson.parseJSON (over Aeson.members (^?! Aeson.key "a") nowAvailableList)
+  nowAvailableList' <- parseValue (over Aeson.members (^?! Aeson.key "a") nowAvailableList)
 
-  lastActiveTimes <- buddyList ^? Aeson.key "last_active_times" >>= parse Aeson.parseJSON
+  lastActiveTimes <- buddyList ^? Aeson.key "last_active_times" >>= parseValue
 
   return (nowAvailableList', lastActiveTimes)
 
-eitherToError :: Catch.MonadThrow m => Either String b -> m b
-eitherToError = either (Catch.throwM . FBException) return
-
-maybeToError :: Catch.MonadThrow m => Maybe b -> m b
-maybeToError = maybe (Catch.throwM (FBException "was Maybe")) return
-
-decode :: (FromJSON a, Catch.MonadThrow m) => LByteString -> m a
-decode = eitherToError . Aeson.eitherDecode
-
-parse :: (FromJSON a, Catch.MonadThrow m) => (a -> Aeson.Parser b) -> a -> m b
-parse f = eitherToError . (Aeson.parseEither f)
-
-timeToMilliseconds :: Integral a => Time.UTCTime -> a
-timeToMilliseconds time = round ((Time.POSIX.utcTimeToPOSIXSeconds time) * 1000)
-
-responseToXML :: Wreq.Response LByteString -> XML.Cursor
-responseToXML response = (XML.fromDocument . HTML.parseLBS) (response ^. Wreq.responseBody)
+searchForThread :: Text -> StateT FBSession IO [ResponseTypes.Thread]
+searchForThread query = do
+  let form = [ ("client", "web_messenger")
+             , ("query", query)
+             , ("offset", "0")
+             , ("limit", "21")
+             , ("index", "fbid")
+             ]
+  post' "https://www.facebook.com/ajax/mercury/search_threads.php" form
+    >>= (parseJson . (^. Wreq.responseBody))
+    >>= (^? Aeson.key "payload" . Aeson.key "mercury_payload" . Aeson.key "threads")
+    >>= parseValue
 
 login :: Wreq.Session.Session -> Authentication -> IO (Maybe FBSession)
 login session (Authentication username password) = do
