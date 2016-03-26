@@ -51,9 +51,9 @@ import Debug.Trace
 newtype FBException = FBException String deriving Show
 instance Exception FBException
 
-parseJson :: Catch.MonadThrow m => LByteString -> m LByteString
+parseJson :: Catch.MonadThrow m => LByteString -> m Aeson.Value
 parseJson str = if first == prefix
-                  then return rest
+                  then decode rest
                   else Catch.throwM (FBException ("expected" <> textToString (show prefix) <> ", but found " <> textToString (show rest)))
   where prefix = "for (;;);"
         (first, rest) = ByteString.Lazy.splitAt (ByteString.Lazy.length prefix) str
@@ -199,7 +199,7 @@ getThreadList start end = do
       ]
 
   r <- post' threadsURL form
-  json <- parseJson (r ^. Wreq.responseBody) >>= decode
+  json <- parseJson (r ^. Wreq.responseBody)
 
   parse (ResponseTypes.parseResponse "threads") json
 
@@ -210,8 +210,8 @@ getFriendsList = do
 
   response <- post' "https://www.facebook.com/chat/user_info_all" form
 
-  decoded :: Aeson.Value <- parseJson (response ^. Wreq.responseBody) >>= decode
-  res_ <- maybeToError (decoded ^? Aeson.key "payload")
+  json :: Aeson.Value <- parseJson (response ^. Wreq.responseBody)
+  res_ <- maybeToError (json ^? Aeson.key "payload")
   res <- parse Aeson.parseJSON res_
 
   return res
@@ -225,7 +225,7 @@ getOnlineUsers = do
              , ("get_now_available_list", "true") ]
   response <- post' "https://www.facebook.com/ajax/chat/buddy_list.php" form
 
-  json :: Aeson.Value <- parseJson (response ^. Wreq.responseBody) >>= decode
+  json :: Aeson.Value <- parseJson (response ^. Wreq.responseBody)
   buddyList <- maybeToError (json ^? Aeson.key "payload" . Aeson.key "buddy_list")
 
   nowAvailableList <- maybeToError (buddyList ^? Aeson.key "nowAvailableList")
@@ -234,12 +234,6 @@ getOnlineUsers = do
   lastActiveTimes <- maybeToError (buddyList ^? Aeson.key "last_active_times" >>= Aeson.parseMaybe Aeson.parseJSON)
 
   return (nowAvailableList', lastActiveTimes)
-
--- eitherToMaybe :: Either a b -> Maybe b
--- eitherToMaybe = either (const Nothing) Just
-
--- getEither (Left err)  = Exception.throw (FBException err)
--- getEither (Right r) = r
 
 eitherToError :: Catch.MonadThrow m => Either String b -> m b
 eitherToError = either (Catch.throwM . FBException) return
@@ -252,13 +246,6 @@ decode = eitherToError . Aeson.eitherDecode
 
 parse :: (FromJSON a, Catch.MonadThrow m) => (a -> Aeson.Parser b) -> a -> m b
 parse f = eitherToError . (Aeson.parseEither f)
-
--- eitherToError :: Error.MonadError FBException m => Either String b -> m b
--- eitherToError (Left err) = Error.throwError (FBException err)
--- eitherToError (Right b)  = return b
-
-maybeToEither :: Maybe b -> Either String b
-maybeToEither = maybe (Left "was Maybe") Right
 
 timeToMilliseconds :: Integral a => Time.UTCTime -> a
 timeToMilliseconds time = round ((Time.POSIX.utcTimeToPOSIXSeconds time) * 1000)
