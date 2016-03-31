@@ -447,7 +447,6 @@ sendMessage recipient (Message text attachment) = do
         [ "message_batch[0][thread_fbid]" := threadId ]
 
   response <- post' "https://www.facebook.com/ajax/mercury/send_messages.php" (attachmentParams ++ formShared ++ form)
-  print (response ^. Wreq.responseBody)
 
   return ()
 
