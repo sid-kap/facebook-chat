@@ -1,6 +1,6 @@
 # facebook-chat
 
-A simple Facebook chat client library written in Haskell.
+Simple Haskell bindings to the Facebook Chat API.
 
 This library is very unfinished at the moment.
 
