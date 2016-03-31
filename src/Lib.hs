@@ -227,7 +227,7 @@ getUserId query = do
     >>= parseJson
 
 -- TODO accept start/end arguments
-getThreadList :: Int -> Int -> StateT FBSession IO (ResponseTypes.Response [ResponseTypes.Thread])
+getThreadList :: Int -> Int -> StateT FBSession IO [ResponseTypes.Thread]
 getThreadList start end = do
   let
     form =
@@ -236,30 +236,32 @@ getThreadList start end = do
       , "inbox[limit]"  := (end - start)
       ]
 
-  r <- post' threadsURL form
-  json <- parseJson (r ^. Wreq.responseBody)
-
-  parse (ResponseTypes.parseResponse "threads") json
+  post' threadsURL form
+    >>= (^? Wreq.responseBody)
+    >>= parseJson
+    >>= (^? Aeson.key "payload" . Aeson.key "threads")
+    >>= parseValue
 
 getFriendsList :: StateT FBSession IO (HashMap Text ResponseTypes.Friend)
 getFriendsList = do
   uid_ <- uid <$> State.get
   let form = ["viewer" := (show uid_)]
 
-  response <- post' "https://www.facebook.com/chat/user_info_all" form
-
-  json :: Aeson.Value <- parseJson (response ^. Wreq.responseBody)
-  res_ <- json ^? Aeson.key "payload"
-  res <- parseValue res_
-
-  return res
+  post' "https://www.facebook.com/chat/user_info_all" form
+    >>= (^? Wreq.responseBody)
+    >>= parseJson
+    >>= (^? Aeson.key "payload")
+    >>= parseValue
 
 getUserInfo :: [ResponseTypes.UserId] -> StateT FBSession IO (HashMap ResponseTypes.UserId ResponseTypes.Friend)
 getUserInfo userIds = do
   let form = [ ("ids[" <> (encode $ show i) <> "]") := v | (i,v) <- zip [1..] userIds ]
-  response <- post' "https://www.facebook.com/chat/user_info/" form
-  json <- parseJson (response ^. Wreq.responseBody) >>= (^? Aeson.key "payload" . Aeson.key "profiles")
-  parseValue json
+
+  post' "https://www.facebook.com/chat/user_info/" form
+    >>= (^? Wreq.responseBody)
+    >>= parseJson
+    >>= (^? Aeson.key "payload" . Aeson.key "profiles")
+    >>= parseValue
 
 getOnlineUsers :: StateT FBSession IO (HashMap ResponseTypes.UserId ResponseTypes.Status, HashMap ResponseTypes.UserId Integer)
 getOnlineUsers = do
@@ -269,17 +271,18 @@ getOnlineUsers = do
              , "fetch_mobile" := ("false" :: Text)
              , "get_now_available_list" := ("true" :: Text)
              ]
-  response <- post' "https://www.facebook.com/ajax/chat/buddy_list.php" form
-
-  json :: Aeson.Value <- parseJson (response ^. Wreq.responseBody)
-  buddyList <- json ^? Aeson.key "payload" . Aeson.key "buddy_list"
+  buddyList <- post' "https://www.facebook.com/ajax/chat/buddy_list.php" form
+              >>= (^? Wreq.responseBody)
+              >>= parseJson
+              >>= (^? Aeson.key "payload" . Aeson.key "buddy_list")
 
   nowAvailableList <- buddyList ^? Aeson.key "nowAvailableList"
-  nowAvailableList' <- parseValue (over Aeson.members (^?! Aeson.key "a") nowAvailableList)
+                      >>= parseValue . over Aeson.members (^?! Aeson.key "a")
 
-  lastActiveTimes <- buddyList ^? Aeson.key "last_active_times" >>= parseValue
+  lastActiveTimes <- buddyList ^? Aeson.key "last_active_times"
+                      >>= parseValue
 
-  return (nowAvailableList', lastActiveTimes)
+  return (nowAvailableList, lastActiveTimes)
 
 searchForThread :: Text -> StateT FBSession IO [ResponseTypes.Thread]
 searchForThread query = do
@@ -290,7 +293,8 @@ searchForThread query = do
              , "index"  := ("fbid" :: Text)
              ]
   post' "https://www.facebook.com/ajax/mercury/search_threads.php" form
-    >>= (parseJson . (^. Wreq.responseBody))
+    >>= (^? Wreq.responseBody)
+    >>= parseJson
     >>= (^? Aeson.key "payload" . Aeson.key "mercury_payload" . Aeson.key "threads")
     >>= parseValue
 
@@ -303,8 +307,7 @@ sendTypingIndicator threadId start = do
              , "source" := ("mercury-chat" :: Text)
              , "thread" := threadId
              ]
-  post' "https://www.facebook.com/ajax/messaging/typ.php" form
-  return ()
+  void (post' "https://www.facebook.com/ajax/messaging/typ.php" form)
 
 setThreadColor :: Text -> Text -> StateT FBSession IO ()
 setThreadColor color threadID = do
@@ -312,7 +315,9 @@ setThreadColor color threadID = do
              , "thread_or_other_fbid" := threadID
              ]
   response <- post' "https://www.messenger.com/messaging/save_thread_color/?source=thread_settings&dpr=1" form
-  response <- parseJson (response ^. Wreq.responseBody)
+              >>= (^? Wreq.responseBody)
+              >>= parseJson
+
   case response ^? Aeson.key "errorSummary" of
     Just (Aeson.String err) -> throwIO (FBException err)
     Nothing -> return ()
@@ -337,8 +342,9 @@ formEncode s value = case value of
 makeAttachmentParams :: Attachment -> StateT FBSession IO [FormParam]
 makeAttachmentParams (Files files) = do
   metadatas :: [[(Text, Aeson.Value)]] <- forM files $ \filepath -> do
-    response <- postParts "https://upload.facebook.com/ajax/mercury/upload.php" [Wreq.partFileSource "upload_1024" filepath]
-    json <- parseJson (response ^. Wreq.responseBody)
+    json <- postParts "https://upload.facebook.com/ajax/mercury/upload.php" [Wreq.partFileSource "upload_1024" filepath]
+            >>= (^? Wreq.responseBody)
+            >>= parseJson
 
     case json ^? Aeson.key "errorSummary" of
       Just err -> throwIO (FBException (show err))
@@ -355,9 +361,8 @@ makeAttachmentParams (Files files) = do
     allAttachments = Maybe.mapMaybe mkParam (concat metadatas)
 
     attachmentsForm =
-      [ ("message_batch[0][" <> encode attachmentType <> "s][" <> encode (show i) <> "]")
-                    := value
-                  | (i, (attachmentType, value)) <- zip [1..] allAttachments ]
+      [ ("message_batch[0][" <> encode attachmentType <> "s][" <> encode (show i) <> "]") := value
+      | (i, (attachmentType, value)) <- zip [1..] allAttachments ]
 
   return attachmentsForm
 
@@ -365,14 +370,16 @@ makeAttachmentParams (URL url) = do
   let form = [ "image_height" := ("960" :: Text)
              , "image_width"  := ("960" :: Text)
              , "uri"          := url]
-  response <- post' "https://www.facebook.com/message_share_attachment/fromURI/" form
-  json <- parseJson (response ^. Wreq.responseBody)
+  json <- post' "https://www.facebook.com/message_share_attachment/fromURI/" form
+           >>= (^? Wreq.responseBody)
+           >>= parseJson
+
   case json ^? Aeson.key "payload" . Aeson.key "share_data" . Aeson.key "share_params" of
     Just share_params -> do
-      let form' =
-           ["message_batch[0][shareable_attachment][share_type]" := ("100" :: Text)]
-           ++ (formEncode "message_batch[0][shareable_attachment][share_params]" share_params)
-      return form'
+      return (
+       ["message_batch[0][shareable_attachment][share_type]" := ("100" :: Text)]
+       ++ (formEncode "message_batch[0][shareable_attachment][share_params]" share_params)
+       )
     Nothing -> throwIO (FBException "Invalid url")
 
 makeAttachmentParams (Sticker stickerId) =
@@ -397,8 +404,6 @@ sendMessage recipient (Message text attachment) = do
 
     (%:=) x y = x := (y :: Text)
 
-    -- messageAndOTID = "6121135901006315867" -- utils.genereateOfflineThreadingId()
-
     formShared =
       [ "client" %:= "mercury"
       , "message_batch[0][action_type]" %:= "ma-type:user-generated-message"
@@ -407,7 +412,6 @@ sendMessage recipient (Message text attachment) = do
       , "message_batch[0][timestamp_absolute]" %:= "Today"
       , "message_batch[0][timestamp_relative]" %:=
           (show (Time.todHour timeOfDay) <> ":" <> show (Time.todMin timeOfDay))
-      --"12:00" -- might need to fix this later, with actual current time
       , "message_batch[0][timestamp_time_passed]" %:= "0"
       , "message_batch[0][is_unread]" %:= "false"
       , "message_batch[0][is_cleared]" %:= "false"

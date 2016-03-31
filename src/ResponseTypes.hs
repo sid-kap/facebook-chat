@@ -18,30 +18,10 @@ import Data.Time.Clock (UTCTime)
 
 import qualified Data.Scientific as Scientific
 
-data Response a = Response
-  { __ar :: Int
-  , payload :: a
-  , bootloadable :: Aeson.Object
-  , ixData :: Aeson.Object
-  , lid :: Text
-  } deriving Show
-
 -- TODO get rid of this orphan instance
 instance FromJSON (Time.NominalDiffTime) where
   parseJSON (Aeson.Number n) = return (realToFrac (Scientific.toRealFloat (n / 1000)))
   parseJSON _ = empty
-
-parseResponse :: FromJSON a => Text -> (Aeson.Value -> Aeson.Parser (Response a))
-parseResponse name = parser
-  where
-    parser (Aeson.Object o) =
-          Response
-      <$> o .: "__ar"
-      <*> ((o .: "payload") >>= (.: name))
-      <*> o .: "bootloadable"
-      <*> o .: "ixData"
-      <*> o .: "lid"
-    parser _ = empty
 
 data Gender = Unknown
             | Female_Singular
