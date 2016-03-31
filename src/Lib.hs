@@ -210,7 +210,7 @@ generatePayload = do
 -- API functions
 -----------------------------------------------------------
 
-getUserId :: Text -> StateT FBSession IO (Wreq.Response LByteString)
+getUserId :: Text -> StateT FBSession IO Aeson.Value
 getUserId query = do
   uid_ <- uid <$> State.get
   let
@@ -223,6 +223,8 @@ getUserId query = do
       , ("request_id", "1304")
       ]
   get' "https://www.facebook.com/ajax/typeahead/search.php" form
+    >>= (^? Wreq.responseBody)
+    >>= parseJson
 
 -- TODO accept start/end arguments
 getThreadList :: Int -> Int -> StateT FBSession IO (ResponseTypes.Response [ResponseTypes.Thread])
