@@ -442,11 +442,12 @@ markAsRead threadId =
 
 login :: Authentication -> IO (Maybe FBSession)
 login (Authentication username password) = do
-  loginPage <- Wreq.getWith Wreq.defaults mobileURL
+  loginPage <- Wreq.get mobileURL
 
   let
     doc = responseToXML loginPage
-    inputs = (doc XML.$.// XML.attributeIs "id" "login_form") >>= (XML.$.// XML.element "input")
+    inputs = (doc XML.$.// XML.attributeIs "id" "login_form")
+              >>= (XML.$.// XML.element "input")
     formUrl = textToString $ concat $ doc XML.$.// XML.attributeIs "id" "login_form" >=> XML.attribute "action"
 
     pairs :: [FormParam]
