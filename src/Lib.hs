@@ -114,9 +114,6 @@ mobileURL     = "https://m.facebook.com/"
 stickyURL     = "https://0-edge-chat.facebook.com/pull"
 pingURL       = "https://0-channel-proxy-06-ash2.facebook.com/active_ping"
 
-userAgent :: Text
-userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/42.0.2311.90 Safari/537.36"
-
 client :: Text
 client = "mercury"
 
@@ -128,29 +125,13 @@ data Authentication = Authentication
 data FBSession = FBSession
   { cookieJar :: HTTP.CookieJar
   , requestCounter :: Int
-  , seq' :: Text
-  , sessionUserAgent :: ByteString
-  , prev :: Time.UTCTime
-  , tmpPrev :: Time.UTCTime
-  , lastSync :: Time.UTCTime
   , payloadDefault :: Params
-  , ttStamp :: Text
   , uid :: Integer
-  , userChannel :: Text
-  , clientId :: Text
   }
 
 sessionOpts :: FBSession -> Wreq.Options
 sessionOpts session =
   Wreq.defaults & Wreq.cookies .~ (Just (Lib.cookieJar session))
-
-data Payload = Payload
-  { rev :: Text
-  , user :: Text
-  , a :: Text
-  , ttstamp :: Text
-  , fb_dtsg :: Text
-  }
 
 type Params = [(Text, Text)]
 
@@ -452,9 +433,7 @@ sendMessage recipient (Message text attachment) = do
       ToGroup threadId ->
         [ "message_batch[0][thread_fbid]" := threadId ]
 
-  response <- post' "https://www.facebook.com/ajax/mercury/send_messages.php" (attachmentParams ++ formShared ++ form)
-
-  return ()
+  void (post' "https://www.facebook.com/ajax/mercury/send_messages.php" (attachmentParams ++ formShared ++ form))
 
 markAsRead :: Text -> StateT FBSession IO ()
 markAsRead threadId =
@@ -468,7 +447,7 @@ login (Authentication username password) = do
   let
     doc = responseToXML loginPage
     inputs = (doc XML.$.// XML.attributeIs "id" "login_form") >>= (XML.$.// XML.element "input")
-    formUrl = doc XML.$.// XML.attributeIs "id" "login_form" >=> XML.attribute "action"
+    formUrl = textToString $ concat $ doc XML.$.// XML.attributeIs "id" "login_form" >=> XML.attribute "action"
 
     pairs :: [FormParam]
     pairs = [   (encode $ concat (XML.attribute "name"  cursor))
@@ -483,19 +462,7 @@ login (Authentication username password) = do
     -- additionalPairs entries take precedence over pairs entries
     payload = pairs ++ additionalPairs
 
-    headerOptions :: Wreq.Options -> Wreq.Options
-    headerOptions = foldr1 (.) updates
-      where
-        updates :: [Wreq.Options -> Wreq.Options]
-        updates = [ Wreq.header "Referer"      .~ [encode baseURL]
-                  , Wreq.header "Origin"       .~ [encode baseURL]
-                  , Wreq.header "User-Agent"   .~ [encode userAgent]
-                  , Wreq.header "Connection"   .~ ["keep-alive"]
-                  ]
-
-    opts = Wreq.defaults & headerOptions
-
-  loginResponse <- Wreq.postWith opts (textToString $ concat formUrl) payload
+  loginResponse <- Wreq.post formUrl payload
 
   let
     uidMaybe :: Maybe Integer
@@ -505,13 +472,7 @@ login (Authentication username password) = do
     Nothing -> return Nothing
 
     Just uid -> do
-      clientId <- Text.pack . flip Numeric.showHex "" <$> (Random.randomIO :: IO Int)
-      now <- Time.getCurrentTime
       let
-        startTime = timeToMilliseconds now
-
-        userChannel = "p_" <> show uid
-
         doc' = responseToXML loginResponse
 
         fb_dtsg = concat $ doc' XML.$.// (XML.attributeIs "name" "fb_dtsg" >=> XML.attribute "value")
@@ -528,10 +489,6 @@ login (Authentication username password) = do
           , ("fb_dtsg", fb_dtsg)
           ]
 
-        prev     = now
-        tmpPrev  = now
-        lastSync = now
-
         cookies :: [HTTP.Cookie]
         cookies = HTTP.destroyCookieJar (loginResponse ^. Wreq.responseCookieJar)
 
@@ -546,16 +503,8 @@ login (Authentication username password) = do
         fbSession = FBSession
           { cookieJar = newCookieJar
           , requestCounter = 1
-          , seq' = ""
-          , sessionUserAgent = encode userAgent
-          , prev = prev
-          , tmpPrev = tmpPrev
-          , lastSync = lastSync
           , payloadDefault = payloadDefault
-          , ttStamp = ttStamp
           , uid = uid
-          , userChannel = userChannel
-          , clientId = clientId
           }
 
       return (Just fbSession)
