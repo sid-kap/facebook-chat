@@ -4,7 +4,7 @@ module Main where
 import BasicPrelude
 
 import Lib
-import qualified ResponseTypes
+import ResponseTypes
 import Control.Concurrent as Concurrent
 
 import Lens.Family ((&), (.~), (^.), (^..), (^?), over)
@@ -26,17 +26,37 @@ main = do
     Nothing -> putStrLn "error logging in"
 
 action = do
-  [attGroup] <- searchForThread "at&t"
-  let
-    threadId = ResponseTypes.thread_id attGroup
-    colors = [ Colour.hsl hue 1 0.3 | hue <- [0,20..360] ]
+  -- sendMessage undefined (Message "hello" (Just (Files ["stuff"])))
+  -- res <- makeAttachmentParams (Files ["stuff", "more_stuff"])
+  [group] <- searchForThread "statistics af"
+  -- res <- makeAttachmentParams (URL "http://google.com")
+  -- print group
+  -- print res
+  forM_ [1..40] $ \i -> do
+    -- sendMessage (ToGroup (thread_fbid group)) (Message ("testing " <> show i) Nothing)
+    sendMessage (ToGroup (thread_fbid group)) (Message "sup ashwin" Nothing)
+    liftIO $ Concurrent.threadDelay 500000 -- 1000000
 
-  putStrLn (ResponseTypes.name attGroup)
+  -- sendMessage (ToGroup (thread_fbid group)) (Message ("testing ") Nothing)
 
-  forM_ colors $ \c -> do
-    liftIO $ print c
-    let colorString =
-          fromString (Colour.sRGB24show (Colour.uncurryRGB Colour.sRGB c))
-    print colorString
-    setThreadColor colorString threadId
-    liftIO $ Concurrent.threadDelay 3000000
+    -- (Message "testing" (Just (URL "http://google.com")))
+    -- (Message "testing" (Just (Files ["stuff"])))
+  -- let
+  --   threadId = ResponseTypes.thread_id attGroup
+  --   colors = [ Colour.hsl hue 1 0.3 | hue <- [0,20..360] ]
+
+  -- putStrLn (ResponseTypes.name attGroup)
+
+  -- [thread] <- searchForThread "food group"
+  -- let colorString = "#887663"
+  -- let colorString = "#ffffff"
+  -- let colorString = "#888888"
+  -- setThreadColor colorString (ResponseTypes.thread_id thread)
+
+  -- forM_ colors $ \c -> do
+  --   liftIO $ print c
+  --   let colorString =
+  --         fromString (Colour.sRGB24show (Colour.uncurryRGB Colour.sRGB c))
+  --   print colorString
+  --   setThreadColor colorString threadId
+  --   liftIO $ Concurrent.threadDelay 3000000

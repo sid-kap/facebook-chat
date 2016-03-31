@@ -9,6 +9,7 @@ import BasicPrelude
 import qualified Control.Applicative as Applicative
 import qualified Data.Char as Char
 import qualified Data.Maybe as Maybe
+import qualified Data.Foldable as Foldable
 import qualified Control.Exception.Base as Exception
 
 import qualified Control.Monad.State as State
@@ -24,17 +25,20 @@ import qualified Network.Wreq as Wreq
 import Network.Wreq (FormParam((:=)))
 import qualified Network.HTTP.Client as HTTP
 
-import Control.Lens ((&), (.~), (^.), (^..), (^?!), over, _Left)
-import qualified Control.Lens as Lens ((^?))
+import Control.Lens ((&), (.~), (^.), (^..), (^@..), (^?!), over, _Left, _head, _1, _2, (%~))
+import qualified Control.Lens as Lens ((^?), elementsOf)
 
 import qualified Numeric
 import qualified Data.Time.Clock as Time
+import qualified Data.Time.LocalTime as Time
 import qualified Data.Time.Clock.POSIX as Time.POSIX
 
 import qualified Data.Aeson       as Aeson
 import qualified Data.Aeson.Types as Aeson
 import           Data.Aeson                (FromJSON)
 import qualified Data.Aeson.Lens  as Aeson
+
+import qualified Data.Scientific as Scientific
 
 import qualified Text.HTML.DOM as HTML
 import qualified Text.XML as XML
@@ -49,7 +53,7 @@ import qualified ResponseTypes as ResponseTypes
 
 import Debug.Trace
 
-newtype FBException = FBException String deriving Show
+newtype FBException = FBException Text deriving Show
 instance Exception FBException
 
 -----------------------------------------------------------
@@ -63,7 +67,7 @@ parseJson :: Catch.MonadThrow m => LByteString -> m Aeson.Value
 parseJson str =
   if first == prefix
     then decode rest
-    else Catch.throwM (FBException ("expected" <> textToString (show prefix) <> ", but found " <> textToString (show rest)))
+    else Catch.throwM (FBException ("expected" <> show prefix <> ", but found " <> show rest))
   where
     prefix = "for (;;);"
     (first, rest) = ByteString.Lazy.splitAt (ByteString.Lazy.length prefix) str
@@ -71,7 +75,7 @@ parseJson str =
 encode = Encoding.encodeUtf8
 
 eitherToError :: Catch.MonadThrow m => Either String b -> m b
-eitherToError = either (Catch.throwM . FBException) return
+eitherToError = either (Catch.throwM . FBException . fromString) return
 
 maybeToError :: Catch.MonadThrow m => Maybe b -> m b
 maybeToError = maybe (Catch.throwM (FBException "was Maybe")) return
@@ -151,40 +155,53 @@ data Payload = Payload
 type Params = [(Text, Text)]
 
 data Message = Message Text (Maybe Attachment)
-data Attachment = Sticker Text | File FilePath | URL Text
+data Attachment = Sticker Text | Files [FilePath] | URL Text
 
-post' :: String -> Params -> StateT FBSession IO (Wreq.Response LByteString)
+data Recipient = NewGroup [ResponseTypes.UserId] | ToUser ResponseTypes.UserId | ToGroup Text
+
+postParts :: String -> [Wreq.Part] -> StateT FBSession IO (Wreq.Response LByteString)
+postParts url parts = do
+  fbState <- State.get
+  payload <- generatePayload
+  State.liftIO $ Wreq.postWith (sessionOpts fbState) url (parts ++ map paramToPart payload)
+
+  where
+    paramToPart :: (Text, Text) -> Wreq.Part
+    paramToPart (name, value) = Wreq.partText name value
+
+post' :: String -> [FormParam] -> StateT FBSession IO (Wreq.Response LByteString)
 post' url params = do
   fbState <- State.get
-  payload <- generatePayload params
-  State.liftIO $ Wreq.postWith (sessionOpts fbState) url (map paramToFormParam payload)
+  payload <- generatePayload
+  State.liftIO $ Wreq.postWith (sessionOpts fbState) url ((map paramToFormParam payload) ++ params)
 
   where
     paramToFormParam :: (Text, Text) -> FormParam
     paramToFormParam (name, value) = (encode name) := (encode value)
 
-get' :: String -> Params -> StateT FBSession IO (Wreq.Response LByteString)
+get' :: String -> [(Text, Text)] -> StateT FBSession IO (Wreq.Response LByteString)
 get' url params = do
   fbState <- State.get
-  payload <- generatePayload params
-  let opts = (sessionOpts fbState) & foldr1 (.) (map toParam payload)
+  payload <- generatePayload
+  let opts = (sessionOpts fbState) & foldr1 (.) (map toParam (payload ++ params))
   State.liftIO $ Wreq.getWith opts url
   where
     toParam (name, value) = Wreq.param name .~ [value]
 
 -- Not sure that this function should have side effects (incrementing the
 -- request counter). Maybe this should be done in get' and post'.
-generatePayload :: MonadState FBSession m => Params -> m Params
-generatePayload params = do
+generatePayload :: MonadState FBSession m => m Params
+generatePayload = do
   fbState <- State.get
-  let count' = (requestCounter fbState) + 1
+  let
+    count' = (requestCounter fbState) + 1
 
-      encodeDigit x
-        | 0  <= x && x < 10 = Char.chr (x + Char.ord '0')
-        | 10 <= x && x < 36 = Char.chr ((x - 10) + Char.ord 'a')
+    encodeDigit x
+      | 0  <= x && x < 10 = Char.chr (x + Char.ord '0')
+      | 10 <= x && x < 36 = Char.chr ((x - 10) + Char.ord 'a')
 
-      params' = (payloadDefault fbState) ++ params
-                ++ [("__req", Text.pack $ Numeric.showIntAtBase 36 encodeDigit count' "")]
+    params' = (payloadDefault fbState)
+              ++ [("__req", Text.pack $ Numeric.showIntAtBase 36 encodeDigit count' "")]
 
   State.put $ fbState { requestCounter = count' }
   return params'
@@ -212,9 +229,9 @@ getThreadList :: Int -> Int -> StateT FBSession IO (ResponseTypes.Response [Resp
 getThreadList start end = do
   let
     form =
-      [ ("client",        client)
-      , ("inbox[offset]", show start)
-      , ("inbox[limit]",  show (end - start))
+      [ "client"        := client
+      , "inbox[offset]" := start
+      , "inbox[limit]"  := (end - start)
       ]
 
   r <- post' threadsURL form
@@ -225,7 +242,7 @@ getThreadList start end = do
 getFriendsList :: StateT FBSession IO (HashMap Text ResponseTypes.Friend)
 getFriendsList = do
   uid_ <- uid <$> State.get
-  let form = [("viewer", show uid_)]
+  let form = ["viewer" := (show uid_)]
 
   response <- post' "https://www.facebook.com/chat/user_info_all" form
 
@@ -237,7 +254,7 @@ getFriendsList = do
 
 getUserInfo :: [ResponseTypes.UserId] -> StateT FBSession IO (HashMap ResponseTypes.UserId ResponseTypes.Friend)
 getUserInfo userIds = do
-  let form = [ ("ids[" <> show i <> "]", v) | (i,v) <- zip [1..] userIds ]
+  let form = [ ("ids[" <> (encode $ show i) <> "]") := v | (i,v) <- zip [1..] userIds ]
   response <- post' "https://www.facebook.com/chat/user_info/" form
   json <- parseJson (response ^. Wreq.responseBody) >>= (^? Aeson.key "payload" . Aeson.key "profiles")
   parseValue json
@@ -246,9 +263,10 @@ getOnlineUsers :: StateT FBSession IO (HashMap ResponseTypes.UserId ResponseType
 getOnlineUsers = do
   uid_ <- uid <$> State.get
   -- TODO specify this using Bool type instead of strings
-  let form = [ ("user", show uid_)
-             , ("fetch_mobile", "false")
-             , ("get_now_available_list", "true") ]
+  let form = [ "user" := (show uid_)
+             , "fetch_mobile" := ("false" :: Text)
+             , "get_now_available_list" := ("true" :: Text)
+             ]
   response <- post' "https://www.facebook.com/ajax/chat/buddy_list.php" form
 
   json :: Aeson.Value <- parseJson (response ^. Wreq.responseBody)
@@ -263,11 +281,11 @@ getOnlineUsers = do
 
 searchForThread :: Text -> StateT FBSession IO [ResponseTypes.Thread]
 searchForThread query = do
-  let form = [ ("client", "web_messenger")
-             , ("query", query)
-             , ("offset", "0")
-             , ("limit", "21")
-             , ("index", "fbid")
+  let form = [ "client" := ("web_messenger" :: Text)
+             , "query"  := query
+             , "offset" := (0 :: Int)
+             , "limit"  := (21 :: Int)
+             , "index"  := ("fbid" :: Text)
              ]
   post' "https://www.facebook.com/ajax/mercury/search_threads.php" form
     >>= (parseJson . (^. Wreq.responseBody))
@@ -278,24 +296,160 @@ searchForThread query = do
 sendTypingIndicator :: Text -> Bool -> StateT FBSession IO ()
 sendTypingIndicator threadId start = do
   let isUser = False -- TODO check isUser, or rely on user to send this
-      form = [ ("typ", show (if start then 1 else 0)) -- 1 to start typing, 0 to end typing
-             , ("to", if isUser then threadId else "")
-             , ("source", "mercury-chat")
-             , ("thread", threadId)
+      form = [ "typ"    := ((if start then 1 else 0) :: Int) -- 1 to start typing, 0 to end typing
+             , "to"     := (if isUser then threadId else "")
+             , "source" := ("mercury-chat" :: Text)
+             , "thread" := threadId
              ]
   post' "https://www.facebook.com/ajax/messaging/typ.php" form
   return ()
 
 setThreadColor :: Text -> Text -> StateT FBSession IO ()
 setThreadColor color threadID = do
-  let form = [ ("color_choice", color)
-             , ("thread_or_other_fbid", threadID)
+  let form = [ "color_choice"         := color
+             , "thread_or_other_fbid" := threadID
              ]
   response <- post' "https://www.messenger.com/messaging/save_thread_color/?source=thread_settings&dpr=1" form
   response <- parseJson (response ^. Wreq.responseBody)
   case response ^? Aeson.key "errorSummary" of
-    Just (Aeson.String err) -> throwIO (FBException (textToString err))
+    Just (Aeson.String err) -> throwIO (FBException err)
     Nothing -> return ()
+
+formEncode :: ByteString -> Aeson.Value -> [FormParam]
+formEncode s value = case value of
+  Aeson.Object o   -> doIndices (HashMap.toList o)
+  Aeson.Array arr  -> doIndices (zip (map show [0..]) (Foldable.toList arr))
+  Aeson.Number n   -> [s := numStr]
+    where numStr = case Scientific.floatingOrInteger n of
+            Left floating -> show floating
+            Right integer -> show integer
+  Aeson.String str -> [s := str]
+  Aeson.Bool bool  -> [s := boolStr]
+    where boolStr :: Text = if bool then "true" else "false"
+  Aeson.Null       -> [s := ("null" :: Text)]
+  where
+    doIndices :: [(Text, Aeson.Value)] -> [FormParam]
+    doIndices pairs = concat $
+      map (\(i, elem) -> formEncode (s <> "[" <> encode i <> "]") elem) pairs
+
+makeAttachmentParams :: Attachment -> StateT FBSession IO [FormParam]
+makeAttachmentParams (Files files) = do
+  metadatas :: [[(Text, Aeson.Value)]] <- forM files $ \filepath -> do
+    response <- postParts "https://upload.facebook.com/ajax/mercury/upload.php" [Wreq.partFileSource "upload_1024" filepath]
+    json <- parseJson (response ^. Wreq.responseBody)
+
+    case json ^? Aeson.key "errorSummary" of
+      Just err -> throwIO (FBException (show err))
+      Nothing  -> return (json ^@.. Aeson.key "payload" . Aeson.key "metadata" . Aeson.nth 0 . Aeson.members)
+
+  let
+    attachmentTypes = ["image_id", "gif_id", "file_id", "video_id"]
+
+    mkParam :: (Text, Aeson.Value) -> Maybe (Text, Text)
+    mkParam (t, Aeson.String aid) | t `elem` attachmentTypes = Just (t, aid)
+    mkParam _ = Nothing
+
+    allAttachments :: [(Text, Text)]
+    allAttachments = Maybe.mapMaybe mkParam (concat metadatas)
+
+    attachmentsForm =
+      [ ("message_batch[0][" <> encode attachmentType <> "s][" <> encode (show i) <> "]")
+                    := value
+                  | (i, (attachmentType, value)) <- zip [1..] allAttachments ]
+
+  return attachmentsForm
+
+makeAttachmentParams (URL url) = do
+  let form = [ "image_height" := ("960" :: Text)
+             , "image_width"  := ("960" :: Text)
+             , "uri"          := url]
+  response <- post' "https://www.facebook.com/message_share_attachment/fromURI/" form
+  json <- parseJson (response ^. Wreq.responseBody)
+  case json ^? Aeson.key "payload" . Aeson.key "share_data" . Aeson.key "share_params" of
+    Just share_params -> do
+      let form' =
+           ["message_batch[0][shareable_attachment][share_type]" := ("100" :: Text)]
+           ++ (formEncode "message_batch[0][shareable_attachment][share_params]" share_params)
+      return form'
+    Nothing -> throwIO (FBException "Invalid url")
+
+makeAttachmentParams (Sticker stickerId) =
+  return [ "message_batch[0][sticker_id]" := stickerId ]
+
+sendMessage :: Recipient -> Message -> StateT FBSession IO ()
+sendMessage recipient (Message text attachment) = do
+  attachmentParams <- case attachment of
+    Just attachment' -> makeAttachmentParams attachment'
+    Nothing -> return []
+
+  uid_ <- uid <$> State.get
+  now <- liftIO Time.getCurrentTime
+  timeOfDay <- liftIO
+                (Time.localTimeOfDay . Time.zonedTimeToLocalTime <$>
+                  Time.utcToLocalZonedTime now)
+
+  signatureId <- liftIO (show <$> (Random.randomIO :: IO Int))
+  messageAndOTID <- liftIO (show <$> (Random.randomIO :: IO Int))
+  let
+    currentTimeMillis = timeToMilliseconds now
+
+    (%:=) x y = x := (y :: Text)
+
+    -- messageAndOTID = "6121135901006315867" -- utils.genereateOfflineThreadingId()
+
+    formShared =
+      [ "client" %:= "mercury"
+      , "message_batch[0][action_type]" %:= "ma-type:user-generated-message"
+      , "message_batch[0][author]" := ("fbid:" <> (show uid_))
+      , "message_batch[0][timestamp]" := show currentTimeMillis
+      , "message_batch[0][timestamp_absolute]" %:= "Today"
+      , "message_batch[0][timestamp_relative]" %:=
+          (show (Time.todHour timeOfDay) <> ":" <> show (Time.todMin timeOfDay))
+      --"12:00" -- might need to fix this later, with actual current time
+      , "message_batch[0][timestamp_time_passed]" %:= "0"
+      , "message_batch[0][is_unread]" %:= "false"
+      , "message_batch[0][is_cleared]" %:= "false"
+      , "message_batch[0][is_forward]" %:= "false"
+      , "message_batch[0][is_filtered_content]" %:= "false"
+      , "message_batch[0][is_filtered_content_bh]" %:= "false"
+      , "message_batch[0][is_filtered_content_account]" %:= "false"
+      , "message_batch[0][is_filtered_content_quasar]" %:= "false"
+      , "message_batch[0][is_filtered_content_invalid_app]" %:= "false"
+      , "message_batch[0][is_spoof_warning]" %:= "false"
+      , "message_batch[0][source]" %:= "source:chat:web"
+      , "message_batch[0][source_tags][0]" %:= "source:chat"
+      , "message_batch[0][body]" %:= text
+      , "message_batch[0][html_body]" %:= "false"
+      , "message_batch[0][ui_push_phase]" %:= "V3"
+      , "message_batch[0][status]" %:= "0"
+      , "message_batch[0][offline_threading_id]" := messageAndOTID
+      , "message_batch[0][message_id]" := messageAndOTID
+      , "message_batch[0][threading_id]" %:= "<1459393423561:1120090019-foo@mail.projektitan.com>"
+      , "message_batch[0][ephemeral_ttl_mode]" %:= "0"
+      , "message_batch[0][manual_retry_cnt]" %:= "0"
+      , "message_batch[0][has_attachment]" := case Maybe.isJust attachment of
+        True -> "true"
+        False -> "false" :: Text
+      , "message_batch[0][signatureID]" %:= signatureId -- "139284019"
+      ]
+
+    form = case recipient of
+      NewGroup userIds ->
+        [ ("message_batch[0][specific_to_list][" <> (encode $ show i) <> "]") := ("fbid:" <> userId)
+        | (i, userId) <- zip [0..] (userIds ++ [show uid_]) ]
+        ++ [ "message_batch[0][client_thread_id]" := ("root:" <> messageAndOTID :: Text)]
+      ToUser userId ->
+        [ "message_batch[0][specific_to_list][0]" := ("fbid:" <> userId)
+        , "message_batch[0][specific_to_list][1]" := ("fbid:" <> show uid_)
+        , "message_batch[0][other_user_fbid]"     := userId
+        ]
+      ToGroup threadId ->
+        [ "message_batch[0][thread_fbid]" := threadId ]
+
+  response <- post' "https://www.facebook.com/ajax/mercury/send_messages.php" (attachmentParams ++ formShared ++ form)
+  print (response ^. Wreq.responseBody)
+
+  return ()
 
 login :: Authentication -> IO (Maybe FBSession)
 login (Authentication username password) = do
