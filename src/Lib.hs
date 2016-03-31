@@ -450,6 +450,11 @@ sendMessage recipient (Message text attachment) = do
 
   return ()
 
+markAsRead :: Text -> StateT FBSession IO ()
+markAsRead threadId =
+  void (post' "https://www.facebook.com/ajax/mercury/change_read_status.php" form)
+  where form = ["ids[" <> encode threadId <> "]" := ("true" :: Text)]
+
 login :: Authentication -> IO (Maybe FBSession)
 login (Authentication username password) = do
   loginPage <- Wreq.getWith Wreq.defaults mobileURL
