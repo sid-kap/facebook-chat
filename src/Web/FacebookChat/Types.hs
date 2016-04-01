@@ -18,7 +18,7 @@ import Data.Time.Clock (UTCTime)
 
 import qualified Data.Scientific as Scientific
 
--- TODO get rid of this orphan instance
+-- TODO get rid of this orphan instance maybe
 instance FromJSON (Time.NominalDiffTime) where
   parseJSON (Aeson.Number n) = return (realToFrac (Scientific.toRealFloat (n / 1000)))
   parseJSON _ = empty
@@ -140,3 +140,4 @@ instance FromJSON Status where
   parseJSON _ = empty
 
 type UserId = Text
+type ThreadId = Text -- Should we rename this to GroupId? or ThreadFBId?

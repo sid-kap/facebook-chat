@@ -111,14 +111,13 @@ data FBSession = FBSession
   , uid :: Integer
   }
 
+data Message = Message Text (Maybe Attachment)
+data Attachment = Sticker Text | Files [FilePath] | URL Text
+data Recipient = NewGroup [UserId] | ToUser UserId | ToGroup Text
+
 sessionOpts :: FBSession -> Wreq.Options
 sessionOpts session =
   Wreq.defaults & Wreq.cookies .~ (Just (cookieJar session))
-
-data Message = Message Text (Maybe Attachment)
-data Attachment = Sticker Text | Files [FilePath] | URL Text
-
-data Recipient = NewGroup [UserId] | ToUser UserId | ToGroup Text
 
 postParts :: String -> [Wreq.Part] -> StateT FBSession IO (Wreq.Response LByteString)
 postParts url parts = do
@@ -260,7 +259,7 @@ searchForThread query = do
     >>= parseValue
 
 -- start is True to start typing, False to stop typing
-sendTypingIndicator :: Text -> Bool -> StateT FBSession IO ()
+sendTypingIndicator :: ThreadId -> Bool -> StateT FBSession IO ()
 sendTypingIndicator threadId start = do
   let isUser = False -- TODO check isUser, or rely on user to send this
       form = [ "typ"    := ((if start then 1 else 0) :: Int) -- 1 to start typing, 0 to end typing
@@ -270,7 +269,15 @@ sendTypingIndicator threadId start = do
              ]
   void (post' "https://www.facebook.com/ajax/messaging/typ.php" form)
 
-setThreadColor :: Text -> Text -> StateT FBSession IO ()
+removeUserFromGroup :: ThreadId -> StateT FBSession IO ()
+removeUserFromGroup threadId = do
+  uid_ <- uid <$> State.get
+  let form = [ "uid" := uid_
+             , "tid" := threadId
+             ]
+  void (post' "https://www.facebook.com/chat/remove_participants" form)
+
+setThreadColor :: Text -> ThreadId -> StateT FBSession IO ()
 setThreadColor color threadID = do
   let form = [ "color_choice"         := color
              , "thread_or_other_fbid" := threadID
@@ -415,7 +422,7 @@ sendMessage recipient (Message text attachment) = do
 
   void (post' "https://www.facebook.com/ajax/mercury/send_messages.php" (attachmentParams ++ formShared ++ form))
 
-markAsRead :: Text -> StateT FBSession IO ()
+markAsRead :: ThreadId -> StateT FBSession IO ()
 markAsRead threadId =
   void (post' "https://www.facebook.com/ajax/mercury/change_read_status.php" form)
   where form = ["ids[" <> encode threadId <> "]" := ("true" :: Text)]
