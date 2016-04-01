@@ -1,6 +1,6 @@
 {-# LANGUAGE NoImplicitPrelude, OverloadedStrings, DeriveGeneric, DeriveAnyClass #-}
 
-module ResponseTypes
+module Web.FacebookChat.Types
     where
 
 import BasicPrelude

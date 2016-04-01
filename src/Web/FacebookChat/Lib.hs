@@ -2,7 +2,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE FlexibleContexts #-}
 
-module Lib
+module Web.FacebookChat.Lib
     where
 
 import BasicPrelude
@@ -49,7 +49,7 @@ import qualified Data.ByteString.Lens as ByteString
 import qualified Data.ByteString      as ByteString
 import qualified Data.Text.Lens as Text
 
-import qualified ResponseTypes as ResponseTypes
+import Web.FacebookChat.Types
 
 import Debug.Trace
 
@@ -131,14 +131,14 @@ data FBSession = FBSession
 
 sessionOpts :: FBSession -> Wreq.Options
 sessionOpts session =
-  Wreq.defaults & Wreq.cookies .~ (Just (Lib.cookieJar session))
+  Wreq.defaults & Wreq.cookies .~ (Just (cookieJar session))
 
 type Params = [(Text, Text)]
 
 data Message = Message Text (Maybe Attachment)
 data Attachment = Sticker Text | Files [FilePath] | URL Text
 
-data Recipient = NewGroup [ResponseTypes.UserId] | ToUser ResponseTypes.UserId | ToGroup Text
+data Recipient = NewGroup [UserId] | ToUser UserId | ToGroup Text
 
 postParts :: String -> [Wreq.Part] -> StateT FBSession IO (Wreq.Response LByteString)
 postParts url parts = do
@@ -208,7 +208,7 @@ getUserId query = do
     >>= parseJson
 
 -- TODO accept start/end arguments
-getThreadList :: Int -> Int -> StateT FBSession IO [ResponseTypes.Thread]
+getThreadList :: Int -> Int -> StateT FBSession IO [Thread]
 getThreadList start end = do
   let
     form =
@@ -223,7 +223,7 @@ getThreadList start end = do
     >>= (^? Aeson.key "payload" . Aeson.key "threads")
     >>= parseValue
 
-getFriendsList :: StateT FBSession IO (HashMap Text ResponseTypes.Friend)
+getFriendsList :: StateT FBSession IO (HashMap Text Friend)
 getFriendsList = do
   uid_ <- uid <$> State.get
   let form = ["viewer" := (show uid_)]
@@ -234,7 +234,7 @@ getFriendsList = do
     >>= (^? Aeson.key "payload")
     >>= parseValue
 
-getUserInfo :: [ResponseTypes.UserId] -> StateT FBSession IO (HashMap ResponseTypes.UserId ResponseTypes.Friend)
+getUserInfo :: [UserId] -> StateT FBSession IO (HashMap UserId Friend)
 getUserInfo userIds = do
   let form = [ ("ids[" <> (encode $ show i) <> "]") := v | (i,v) <- zip [1..] userIds ]
 
@@ -244,7 +244,7 @@ getUserInfo userIds = do
     >>= (^? Aeson.key "payload" . Aeson.key "profiles")
     >>= parseValue
 
-getOnlineUsers :: StateT FBSession IO (HashMap ResponseTypes.UserId ResponseTypes.Status, HashMap ResponseTypes.UserId Integer)
+getOnlineUsers :: StateT FBSession IO (HashMap UserId Status, HashMap UserId Integer)
 getOnlineUsers = do
   uid_ <- uid <$> State.get
   -- TODO specify this using Bool type instead of strings
@@ -265,7 +265,7 @@ getOnlineUsers = do
 
   return (nowAvailableList, lastActiveTimes)
 
-searchForThread :: Text -> StateT FBSession IO [ResponseTypes.Thread]
+searchForThread :: Text -> StateT FBSession IO [Thread]
 searchForThread query = do
   let form = [ "client" := ("web_messenger" :: Text)
              , "query"  := query

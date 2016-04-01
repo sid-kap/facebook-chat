@@ -1,5 +1,5 @@
 {-# LANGUAGE NoImplicitPrelude, OverloadedStrings #-}
-module Stickers where
+module Web.FacebookChat.Stickers where
 
 import BasicPrelude
 

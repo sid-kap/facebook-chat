@@ -3,8 +3,9 @@ module Main where
 
 import BasicPrelude
 
-import Lib
-import ResponseTypes
+import Web.FacebookChat.Lib
+import Web.FacebookChat.Types
+import Web.FacebookChat.Stickers
 import Control.Concurrent as Concurrent
 
 import Lens.Family ((&), (.~), (^.), (^..), (^?), over)
@@ -28,14 +29,22 @@ main = do
 action = do
   -- sendMessage undefined (Message "hello" (Just (Files ["stuff"])))
   -- res <- makeAttachmentParams (Files ["stuff", "more_stuff"])
-  [group] <- searchForThread "statistics af"
+  -- [group] <- searchForThread "get tested"
+  -- markAsRead (thread_fbid group)
+  getThreadList 0 20 >>= print
+  -- chris <- getUserId "chris denny"
+  -- print chris
   -- res <- makeAttachmentParams (URL "http://google.com")
   -- print group
   -- print res
-  forM_ [1..40] $ \i -> do
-    -- sendMessage (ToGroup (thread_fbid group)) (Message ("testing " <> show i) Nothing)
-    sendMessage (ToGroup (thread_fbid group)) (Message "sup ashwin" Nothing)
-    liftIO $ Concurrent.threadDelay 500000 -- 1000000
+  -- sendMessage (ToGroup (thread_fbid group))
+  --   (Message "here is a sticker" (Just (Sticker mThumb)))
+    -- (Message "here is 2 files" (Just (Files ["stuff", "more_stuff"])))
+    -- (Message "here's a link" (Just (URL "http://google.com")))
+  -- forM_ [1..40] $ \i -> do
+  --   -- sendMessage (ToGroup (thread_fbid group)) (Message ("testing " <> show i) Nothing)
+  --   sendMessage (ToGroup (thread_fbid group)) (Message "sup ashwin" Nothing)
+  --   liftIO $ Concurrent.threadDelay 500000 -- 1000000
 
   -- sendMessage (ToGroup (thread_fbid group)) (Message ("testing ") Nothing)
 
