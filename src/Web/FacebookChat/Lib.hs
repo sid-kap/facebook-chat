@@ -99,24 +99,6 @@ responseToXML response = (XML.fromDocument . HTML.parseLBS) (response ^. Wreq.re
 -- API helper functions
 -----------------------------------------------------------
 
--- loginURL, searchURL, sendURL, threadsURL, threadSyncURL, messagesURL, readStatusURL, deliveredURL, markSeenURL, baseURL, mobileURL, stickyURL, pingURL :: Text
-loginURL      = "https://m.facebook.com/login.php?login_attempt=1"
-searchURL     = "https://www.facebook.com/ajax/typeahead/search.php"
-sendURL       = "https://www.facebook.com/ajax/mercury/send_messages.php"
-threadsURL    = "https://www.facebook.com/ajax/mercury/threadlist_info.php"
-threadSyncURL = "https://www.facebook.com/ajax/mercury/thread_sync.php"
-messagesURL   = "https://www.facebook.com/ajax/mercury/thread_info.php"
-readStatusURL = "https://www.facebook.com/ajax/mercury/change_read_status.php"
-deliveredURL  = "https://www.facebook.com/ajax/mercury/delivery_receipts.php"
-markSeenURL   = "https://www.facebook.com/ajax/mercury/mark_seen.php"
-baseURL       = "https://www.facebook.com"
-mobileURL     = "https://m.facebook.com/"
-stickyURL     = "https://0-edge-chat.facebook.com/pull"
-pingURL       = "https://0-channel-proxy-06-ash2.facebook.com/active_ping"
-
-client :: Text
-client = "mercury"
-
 data Authentication = Authentication
   { username :: Text
   , password :: Text
@@ -140,9 +122,9 @@ data Recipient = NewGroup [UserId] | ToUser UserId | ToGroup Text
 
 postParts :: String -> [Wreq.Part] -> StateT FBSession IO (Wreq.Response LByteString)
 postParts url parts = do
-  fbState <- State.get
+  opts <- sessionOpts <$> State.get
   payload <- generatePayload
-  State.liftIO $ Wreq.postWith (sessionOpts fbState) url (parts ++ map paramToPart payload)
+  liftIO $ Wreq.postWith opts url (parts ++ map paramToPart payload)
 
   where
     paramToPart :: (Text, Text) -> Wreq.Part
@@ -150,9 +132,9 @@ postParts url parts = do
 
 post' :: String -> [FormParam] -> StateT FBSession IO (Wreq.Response LByteString)
 post' url params = do
-  fbState <- State.get
+  opts <- sessionOpts <$> State.get
   payload <- generatePayload
-  State.liftIO $ Wreq.postWith (sessionOpts fbState) url ((map paramToFormParam payload) ++ params)
+  liftIO $ Wreq.postWith opts url ((map paramToFormParam payload) ++ params)
 
   where
     paramToFormParam :: (Text, Text) -> FormParam
@@ -160,10 +142,10 @@ post' url params = do
 
 get' :: String -> [(Text, Text)] -> StateT FBSession IO (Wreq.Response LByteString)
 get' url params = do
-  fbState <- State.get
+  opts <- sessionOpts <$> State.get
   payload <- generatePayload
-  let opts = (sessionOpts fbState) & foldr1 (.) (map toParam (payload ++ params))
-  State.liftIO $ Wreq.getWith opts url
+  let opts' = opts & foldr1 (.) (map toParam (payload ++ params))
+  liftIO $ Wreq.getWith opts' url
   where
     toParam (name, value) = Wreq.param name .~ [value]
 
@@ -210,12 +192,12 @@ getThreadList :: Int -> Int -> StateT FBSession IO [Thread]
 getThreadList start end = do
   let
     form =
-      [ "client"        := client
+      [ "client"        := ("mercury" :: Text)
       , "inbox[offset]" := start
       , "inbox[limit]"  := (end - start)
       ]
 
-  post' threadsURL form
+  post' "https://www.facebook.com/ajax/mercury/threadlist_info.php" form
     >>= (^? Wreq.responseBody)
     >>= parseJson
     >>= (^? Aeson.key "payload" . Aeson.key "threads")
@@ -440,7 +422,7 @@ markAsRead threadId =
 
 login :: Authentication -> IO (Maybe FBSession)
 login (Authentication username password) = do
-  loginPage <- Wreq.get mobileURL
+  loginPage <- Wreq.get "https://m.facebook.com/"
 
   let
     doc = responseToXML loginPage
