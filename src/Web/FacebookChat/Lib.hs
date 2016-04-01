@@ -125,15 +125,13 @@ data Authentication = Authentication
 data FBSession = FBSession
   { cookieJar :: HTTP.CookieJar
   , requestCounter :: Int
-  , payloadDefault :: Params
+  , payloadDefault :: [(Text, Text)]
   , uid :: Integer
   }
 
 sessionOpts :: FBSession -> Wreq.Options
 sessionOpts session =
   Wreq.defaults & Wreq.cookies .~ (Just (cookieJar session))
-
-type Params = [(Text, Text)]
 
 data Message = Message Text (Maybe Attachment)
 data Attachment = Sticker Text | Files [FilePath] | URL Text
@@ -171,7 +169,7 @@ get' url params = do
 
 -- Not sure that this function should have side effects (incrementing the
 -- request counter). Maybe this should be done in get' and post'.
-generatePayload :: MonadState FBSession m => m Params
+generatePayload :: MonadState FBSession m => m [(Text, Text)]
 generatePayload = do
   fbState <- State.get
   let
@@ -481,7 +479,7 @@ login (Authentication username password) = do
         ttStamp :: Text
         ttStamp = concat [show (Char.ord c) <> "2" | c <- Text.unpack fb_dtsg]
 
-        payloadDefault :: Params
+        payloadDefault :: [(Text, Text)]
         payloadDefault =
           [ ("__rev",   "2246636")
           , ("__user",  show uid)
