@@ -63,6 +63,9 @@ instance Exception FBException
 x ^? lens = maybeToError (x Lens.^? lens)
 infixl 8 ^?
 
+(%:=) :: ByteString -> Text -> FormParam
+(%:=) = (:=)
+
 parseJson :: Catch.MonadThrow m => LByteString -> m Aeson.Value
 parseJson str =
   if first == prefix
@@ -370,8 +373,6 @@ sendMessage recipient (Message text attachment) = do
   let
     currentTimeMillis = timeToMilliseconds now
 
-    (%:=) x y = x := (y :: Text)
-
     formShared =
       [ "client" %:= "mercury"
       , "message_batch[0][action_type]" %:= "ma-type:user-generated-message"
@@ -426,6 +427,41 @@ markAsRead :: ThreadId -> StateT FBSession IO ()
 markAsRead threadId =
   void (post' "https://www.facebook.com/ajax/mercury/change_read_status.php" form)
   where form = ["ids[" <> encode threadId <> "]" := ("true" :: Text)]
+
+setTitle :: ThreadId -> Text -> StateT FBSession IO ()
+setTitle threadId title = do
+  uid_ <- uid <$> State.get
+  messageAndOTID <- liftIO (Random.randomIO :: IO Int)
+  currentTimeMillis <- liftIO (timeToMilliseconds <$> Time.getCurrentTime)
+  let form =
+       [ "client" %:= "mercury"
+       , "message_batch[0][action_type]" %:= "ma-type:log-message"
+       , "message_batch[0][author]" %:= ("fbid:" <> (show uid_))
+       , "message_batch[0][thread_id]" %:= ""
+       , "message_batch[0][author_email]" %:= ""
+       , "message_batch[0][coordinates]" %:= ""
+       , "message_batch[0][timestamp]" := (currentTimeMillis :: Int)
+       , "message_batch[0][timestamp_absolute]" %:= "Today"
+       , "message_batch[0][timestamp_relative]" %:= "12:00"
+       , "message_batch[0][timestamp_time_passed]" %:= "0"
+       , "message_batch[0][is_unread]" %:= "false"
+       , "message_batch[0][is_cleared]" %:= "false"
+       , "message_batch[0][is_forward]" %:= "false"
+       , "message_batch[0][is_filtered_content]" %:= "false"
+       , "message_batch[0][is_spoof_warning]" %:= "false"
+       , "message_batch[0][source]" %:= "source:chat:web"
+       , "message_batch[0][source_tags][0]" %:= "source:chat"
+       , "message_batch[0][status]" %:= "0"
+       , "message_batch[0][offline_threading_id]" := messageAndOTID
+       , "message_batch[0][message_id]" := messageAndOTID
+       , "message_batch[0][threading_id]"%:= "<1459393423561:1120090019-foo@mail.projektitan.com>"
+       , "message_batch[0][manual_retry_cnt]" %:= "0"
+       , "message_batch[0][thread_fbid]" %:= threadId
+       , "message_batch[0][log_message_data][name]" %:= title
+       , "message_batch[0][log_message_type]" %:= "log:thread-name"
+       ]
+
+  void (post' "https://www.facebook.com/ajax/mercury/send_messages.php" form)
 
 login :: Authentication -> IO (Maybe FBSession)
 login (Authentication username password) = do
