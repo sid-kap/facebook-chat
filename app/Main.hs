@@ -8,10 +8,10 @@ import Web.FacebookChat.Types
 import Web.FacebookChat.Stickers
 import Control.Concurrent as Concurrent
 
-import Lens.Family ((&), (.~), (^.), (^..), (^?), over)
+import           Control.Lens         ((&), (.~), (^.), (^@..), (^?!), over, (%~))
 import qualified Network.Wreq.Session as Wreq.Session
-import qualified Network.Wreq as Wreq
-import qualified Control.Monad.State as State
+import qualified Network.Wreq         as Wreq
+import qualified Control.Monad.State  as State
 
 import qualified Data.Colour.RGBSpace.HSL as Colour (hsl)
 import qualified Data.Colour.SRGB         as Colour (sRGB24show, sRGB)
@@ -29,9 +29,10 @@ main = do
 action = do
   -- sendMessage undefined (Message "hello" (Just (Files ["stuff"])))
   -- res <- makeAttachmentParams (Files ["stuff", "more_stuff"])
-  -- [group] <- searchForThread "get tested"
+  [group] <- searchForThread "get muted"
+  setTitle (thread_fbid group) "get muted'"
   -- markAsRead (thread_fbid group)
-  getThreadList 0 20 >>= print
+  -- getThreadList 0 20 >>= print
   -- chris <- getUserId "chris denny"
   -- print chris
   -- res <- makeAttachmentParams (URL "http://google.com")

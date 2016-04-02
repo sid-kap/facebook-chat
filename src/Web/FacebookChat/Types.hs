@@ -8,13 +8,13 @@ import BasicPrelude
 import GHC.Generics (Generic)
 
 import qualified Data.Aeson       as Aeson
-import qualified Data.Aeson.Types as Aeson
 import           Data.Aeson                (FromJSON, (.:), (.:?))
+import qualified Data.Aeson.Types as Aeson
 import qualified Data.Aeson.Lens  as Aeson
 
-import qualified Data.Time.Clock as Time
+import qualified Data.Time.Clock       as Time
+import           Data.Time.Clock                     (UTCTime)
 import qualified Data.Time.Clock.POSIX as Time.POSIX
-import Data.Time.Clock (UTCTime)
 
 import qualified Data.Scientific as Scientific
 

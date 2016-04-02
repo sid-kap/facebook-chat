@@ -6,51 +6,49 @@ module Web.FacebookChat.Lib
     where
 
 import BasicPrelude
-import qualified Control.Applicative as Applicative
-import qualified Data.Char as Char
-import qualified Data.Maybe as Maybe
-import qualified Data.Foldable as Foldable
+
+import qualified Control.Applicative    as Applicative
+import qualified Data.Char              as Char
+import qualified Data.Maybe             as Maybe
+import qualified Data.Foldable          as Foldable
 import qualified Control.Exception.Base as Exception
+import qualified Data.HashMap.Strict    as HashMap
+import qualified System.Random          as Random
+import qualified Numeric
+import qualified Data.Scientific        as Scientific
+import           Debug.Trace
 
 import qualified Control.Monad.State as State
-import Control.Monad.State (State, StateT, MonadState)
+import           Control.Monad.State          (State, StateT, MonadState)
 import qualified Control.Monad.Catch as Catch
 
-import qualified Data.Text as Text
-import qualified Data.HashMap.Strict as HashMap
-import qualified System.Random as Random
-
-import qualified Network.Wreq as Wreq
-import Network.Wreq (FormParam((:=)))
+import qualified Network.Wreq        as Wreq
+import           Network.Wreq                (FormParam((:=)))
 import qualified Network.HTTP.Client as HTTP
 
-import Control.Lens ((&), (.~), (^.), (^..), (^@..), (^?!), over, _Left, _head, _1, _2, (%~))
-import qualified Control.Lens as Lens ((^?), elementsOf)
+import           Control.Lens         ((&), (.~), (^.), (^@..), (^?!), over, (%~))
+import qualified Control.Lens as Lens ((^?))
 
-import qualified Numeric
-import qualified Data.Time.Clock as Time
-import qualified Data.Time.LocalTime as Time
+import qualified Data.Time.Clock       as Time
+import qualified Data.Time.LocalTime   as Time
 import qualified Data.Time.Clock.POSIX as Time.POSIX
 
 import qualified Data.Aeson       as Aeson
-import qualified Data.Aeson.Types as Aeson
 import           Data.Aeson                (FromJSON)
+import qualified Data.Aeson.Types as Aeson
 import qualified Data.Aeson.Lens  as Aeson
 
-import qualified Data.Scientific as Scientific
-
-import qualified Text.HTML.DOM as HTML
-import qualified Text.XML as XML
+import qualified Text.HTML.DOM   as HTML
+import qualified Text.XML        as XML
 import qualified Text.XML.Cursor as XML
 
 import qualified Data.ByteString.Lazy as ByteString.Lazy
-import qualified Data.ByteString.Lens as ByteString
 import qualified Data.ByteString      as ByteString
-import qualified Data.Text.Lens as Text
+import qualified Data.ByteString.Lens as ByteString
+import qualified Data.Text            as Text
+import qualified Data.Text.Lens       as Text
 
 import Web.FacebookChat.Types
-
-import Debug.Trace
 
 newtype FBException = FBException Text deriving Show
 instance Exception FBException
