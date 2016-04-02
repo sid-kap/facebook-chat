@@ -9,9 +9,7 @@ import BasicPrelude
 
 import qualified Control.Applicative    as Applicative
 import qualified Data.Char              as Char
-import qualified Data.Maybe             as Maybe
 import qualified Data.Foldable          as Foldable
-import qualified Control.Exception.Base as Exception
 import qualified Data.HashMap.Strict    as HashMap
 import qualified System.Random          as Random
 import qualified Numeric
@@ -324,7 +322,7 @@ makeAttachmentParams (Files files) = do
     mkParam _ = Nothing
 
     allAttachments :: [(Text, Text)]
-    allAttachments = Maybe.mapMaybe mkParam (concat metadatas)
+    allAttachments = mapMaybe mkParam (concat metadatas)
 
     attachmentsForm =
       [ ("message_batch[0][" <> encodeUtf8 attachmentType <> "s][" <> encodeUtf8 (show i) <> "]") := value
@@ -397,7 +395,7 @@ sendMessage recipient (Message text attachment) = do
       , "message_batch[0][threading_id]" %:= "<1459393423561:1120090019-foo@mail.projektitan.com>"
       , "message_batch[0][ephemeral_ttl_mode]" %:= "0"
       , "message_batch[0][manual_retry_cnt]" %:= "0"
-      , "message_batch[0][has_attachment]" := case Maybe.isJust attachment of
+      , "message_batch[0][has_attachment]" := case isJust attachment of
         True -> "true"
         False -> "false" :: Text
       , "message_batch[0][signatureID]" %:= signatureId -- "139284019"
