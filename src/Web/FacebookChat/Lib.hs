@@ -16,7 +16,6 @@ import qualified Control.Monad.State as State
 import Control.Monad.State (State, StateT, MonadState)
 import qualified Control.Monad.Catch as Catch
 
-import qualified Data.Text.Encoding as Encoding
 import qualified Data.Text as Text
 import qualified Data.HashMap.Strict as HashMap
 import qualified System.Random as Random
@@ -74,8 +73,6 @@ parseJson str =
   where
     prefix = "for (;;);"
     (first, rest) = ByteString.Lazy.splitAt (ByteString.Lazy.length prefix) str
-
-encode = Encoding.encodeUtf8
 
 eitherToError :: Catch.MonadThrow m => Either String b -> m b
 eitherToError = either (Catch.throwM . FBException . fromString) return
@@ -140,7 +137,7 @@ post' url params = do
 
   where
     paramToFormParam :: (Text, Text) -> FormParam
-    paramToFormParam (name, value) = (encode name) := (encode value)
+    paramToFormParam (name, value) = (encodeUtf8 name) := (encodeUtf8 value)
 
 get' :: String -> [(Text, Text)] -> StateT FBSession IO (Wreq.Response LByteString)
 get' url params = do
@@ -218,7 +215,7 @@ getFriendsList = do
 
 getUserInfo :: [UserId] -> StateT FBSession IO (HashMap UserId Friend)
 getUserInfo userIds = do
-  let form = [ ("ids[" <> (encode $ show i) <> "]") := v | (i,v) <- zip [1..] userIds ]
+  let form = [ ("ids[" <> (encodeUtf8 $ show i) <> "]") := v | (i,v) <- zip [1..] userIds ]
 
   post' "https://www.facebook.com/chat/user_info/" form
     >>= (^? Wreq.responseBody)
@@ -308,7 +305,7 @@ formEncode s value = case value of
   where
     doIndices :: [(Text, Aeson.Value)] -> [FormParam]
     doIndices pairs = concat $
-      map (\(i, elem) -> formEncode (s <> "[" <> encode i <> "]") elem) pairs
+      map (\(i, elem) -> formEncode (s <> "[" <> encodeUtf8 i <> "]") elem) pairs
 
 makeAttachmentParams :: Attachment -> StateT FBSession IO [FormParam]
 makeAttachmentParams (Files files) = do
@@ -332,7 +329,7 @@ makeAttachmentParams (Files files) = do
     allAttachments = Maybe.mapMaybe mkParam (concat metadatas)
 
     attachmentsForm =
-      [ ("message_batch[0][" <> encode attachmentType <> "s][" <> encode (show i) <> "]") := value
+      [ ("message_batch[0][" <> encodeUtf8 attachmentType <> "s][" <> encodeUtf8 (show i) <> "]") := value
       | (i, (attachmentType, value)) <- zip [1..] allAttachments ]
 
   return attachmentsForm
@@ -410,7 +407,7 @@ sendMessage recipient (Message text attachment) = do
 
     form = case recipient of
       NewGroup userIds ->
-        [ ("message_batch[0][specific_to_list][" <> (encode $ show i) <> "]") := ("fbid:" <> userId)
+        [ ("message_batch[0][specific_to_list][" <> (encodeUtf8 $ show i) <> "]") := ("fbid:" <> userId)
         | (i, userId) <- zip [0..] (userIds ++ [show uid_]) ]
         ++ [ "message_batch[0][client_thread_id]" := ("root:" <> messageAndOTID :: Text)]
       ToUser userId ->
@@ -426,7 +423,7 @@ sendMessage recipient (Message text attachment) = do
 markAsRead :: ThreadId -> StateT FBSession IO ()
 markAsRead threadId =
   void (post' "https://www.facebook.com/ajax/mercury/change_read_status.php" form)
-  where form = ["ids[" <> encode threadId <> "]" := ("true" :: Text)]
+  where form = ["ids[" <> encodeUtf8 threadId <> "]" := ("true" :: Text)]
 
 setTitle :: ThreadId -> Text -> StateT FBSession IO ()
 setTitle threadId title = do
@@ -474,8 +471,8 @@ login (Authentication username password) = do
     formUrl = textToString $ concat $ doc XML.$.// XML.attributeIs "id" "login_form" >=> XML.attribute "action"
 
     pairs :: [FormParam]
-    pairs = [   (encode $ concat (XML.attribute "name"  cursor))
-             := (encode $ concat (XML.attribute "value" cursor))
+    pairs = [   (encodeUtf8 $ concat (XML.attribute "name"  cursor))
+             := (encodeUtf8 $ concat (XML.attribute "value" cursor))
             | cursor <- inputs ]
 
     additionalPairs = [ "email" := username
@@ -490,7 +487,7 @@ login (Authentication username password) = do
 
   let
     uidMaybe :: Maybe Integer
-    uidMaybe = (loginResponse ^? Wreq.responseCookie "c_user" . Wreq.cookieValue) >>= (readMay . Encoding.decodeUtf8)
+    uidMaybe = (loginResponse ^? Wreq.responseCookie "c_user" . Wreq.cookieValue) >>= (readMay . decodeUtf8)
 
   case uidMaybe of
     Nothing -> return Nothing
