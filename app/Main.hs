@@ -23,14 +23,17 @@ main = do
   let auth = Authentication username password
   fbSessionMaybe <- login auth
   case fbSessionMaybe of
-    Just fbSession -> void $ State.runStateT action fbSession
+    Just fbSession -> do
+      putStrLn "successfully logged in"
+      void $ State.runStateT action fbSession
     Nothing -> putStrLn "error logging in"
 
 action = do
   -- sendMessage undefined (Message "hello" (Just (Files ["stuff"])))
   -- res <- makeAttachmentParams (Files ["stuff", "more_stuff"])
-  [group] <- searchForThread "get muted"
-  setTitle (thread_fbid group) "get muted'"
+  [group] <- searchForThread "centimeme"
+  print group
+  -- setTitle (thread_fbid group) "get muted'"
   -- markAsRead (thread_fbid group)
   -- getThreadList 0 20 >>= print
   -- chris <- getUserId "chris denny"
@@ -47,7 +50,7 @@ action = do
   --   sendMessage (ToGroup (thread_fbid group)) (Message "sup ashwin" Nothing)
   --   liftIO $ Concurrent.threadDelay 500000 -- 1000000
 
-  -- sendMessage (ToGroup (thread_fbid group)) (Message ("testing ") Nothing)
+  -- sendMessage (ToGroup (thread_fbid group)) (Message "testing " Nothing)
 
     -- (Message "testing" (Just (URL "http://google.com")))
     -- (Message "testing" (Just (Files ["stuff"])))

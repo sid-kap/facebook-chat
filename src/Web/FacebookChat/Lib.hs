@@ -24,7 +24,7 @@ import qualified Network.Wreq        as Wreq
 import           Network.Wreq                (FormParam((:=)))
 import qualified Network.HTTP.Client as HTTP
 
-import           Control.Lens         ((&), (.~), (^.), (^@..), (^?!), over, (%~))
+import           Control.Lens         ((&), (.~), (^.), (^@..), (^?!), over, (%~), (^..))
 import qualified Control.Lens as Lens ((^?))
 
 import qualified Data.Time.Clock       as Time
@@ -37,8 +37,8 @@ import qualified Data.Aeson.Types as Aeson
 import qualified Data.Aeson.Lens  as Aeson
 
 import qualified Text.HTML.DOM   as HTML
-import qualified Text.XML        as XML
-import qualified Text.XML.Cursor as XML
+import qualified Text.XML.Lens   as XMLL
+import           Text.XML.Lens           ((./))
 
 import qualified Data.ByteString.Lazy as ByteString.Lazy
 import qualified Data.ByteString      as ByteString
@@ -88,8 +88,8 @@ parseValue = parse Aeson.parseJSON
 timeToMilliseconds :: Integral a => Time.UTCTime -> a
 timeToMilliseconds time = round ((Time.POSIX.utcTimeToPOSIXSeconds time) * 1000)
 
-responseToXML :: Wreq.Response LByteString -> XML.Cursor
-responseToXML response = (XML.fromDocument . HTML.parseLBS) (response ^. Wreq.responseBody)
+responseToDoc :: Wreq.Response LByteString -> XMLL.Document
+responseToDoc response = HTML.parseLBS (response ^. Wreq.responseBody)
 
 -----------------------------------------------------------
 -- API helper functions
@@ -105,17 +105,27 @@ data FBSession = FBSession
   , requestCounter :: Int
   , payloadDefault :: [(Text, Text)]
   , uid :: Integer
+  , clientId :: Text
+  , messagesReceived :: Int
+  , prev :: Maybe Time.UTCTime
   }
 
 data Message = Message Text (Maybe Attachment)
-data Attachment = Sticker Text | Files [FilePath] | URL Text
-data Recipient = NewGroup [UserId] | ToUser UserId | ToGroup Text
+
+data Attachment = Sticker Text
+                | Files [FilePath]
+                | URL Text
+
+data Recipient = NewGroup [UserId]
+               | ToUser   UserId
+               | ToGroup  ThreadId
 
 sessionOpts :: FBSession -> Wreq.Options
 sessionOpts session =
   Wreq.defaults & Wreq.cookies .~ (Just (cookieJar session))
 
-postParts :: String -> [Wreq.Part] -> StateT FBSession IO (Wreq.Response LByteString)
+-- postParts :: String -> [Wreq.Part] -> StateT FBSession IO (Wreq.Response LByteString)
+postParts :: (MonadState FBSession m, MonadIO m) => String -> [Wreq.Part] -> m (Wreq.Response LByteString)
 postParts url parts = do
   opts <- sessionOpts <$> State.get
   payload <- generatePayload
@@ -361,7 +371,7 @@ sendMessage recipient (Message text attachment) = do
                 (Time.localTimeOfDay . Time.zonedTimeToLocalTime <$>
                   Time.utcToLocalZonedTime now)
 
-  signatureId <- liftIO (show <$> (Random.randomIO :: IO Int))
+  signatureId    <- liftIO (show <$> (Random.randomIO :: IO Int))
   messageAndOTID <- liftIO (show <$> (Random.randomIO :: IO Int))
   let
     currentTimeMillis = timeToMilliseconds now
@@ -456,20 +466,48 @@ setTitle threadId title = do
 
   void (post' "https://www.facebook.com/ajax/mercury/send_messages.php" form)
 
+listen :: StateT FBSession IO ()
+listen = do
+  state <- State.get
+  now <- liftIO Time.getCurrentTime
+  State.modify (\s -> s { prev = Just now })
+  let form = [ "channel" %:= ("p_" <> show (uid state))
+             , "seq" %:= "0"
+             , "partition" %:= "-2"
+             , "clientid" %:= clientId state
+             , "viewer_uid" %:= show (uid state)
+             , "uid" %:= show (uid state)
+             , "state" %:= "active"
+             , "idle" %:=
+                case prev state of
+                  Just t  -> show (timeToMilliseconds now - timeToMilliseconds t)
+                  Nothing -> "0"
+             , "cap" %:= "8"
+             , "msgs_recv" := (messagesReceived state)
+             ]
+  return ()
+
 login :: Authentication -> IO (Maybe FBSession)
 login (Authentication username password) = do
   loginPage <- Wreq.get "https://m.facebook.com/"
 
   let
-    doc = responseToXML loginPage
-    inputs = (doc XML.$.// XML.attributeIs "id" "login_form")
-              >>= (XML.$.// XML.element "input")
-    formUrl = textToString $ concat $ doc XML.$.// XML.attributeIs "id" "login_form" >=> XML.attribute "action"
+    doc = responseToDoc loginPage
+
+    inputs :: [XMLL.Element]
+    inputs = doc ^.. XMLL.root
+                 ./  XMLL.attributeIs "id" "login_form"
+                 ./  XMLL.el "input"
+
+    formUrl = textToString $ doc ^. XMLL.root
+                                 .  XMLL.entire
+                                 ./ XMLL.attributeIs "id" "login_form"
+                                 .  XMLL.attr "action"
 
     pairs :: [FormParam]
-    pairs = [   (encodeUtf8 $ concat (XML.attribute "name"  cursor))
-             := (encodeUtf8 $ concat (XML.attribute "value" cursor))
-            | cursor <- inputs ]
+    pairs = [   (encodeUtf8 $ input ^. XMLL.attr "name")
+             := (encodeUtf8 $ input ^. XMLL.attr "value")
+            | input <- inputs ]
 
     additionalPairs = [ "email" := username
                       , "pass"  := password
@@ -489,10 +527,15 @@ login (Authentication username password) = do
     Nothing -> return Nothing
 
     Just uid -> do
+      clientId <- Text.pack . flip Numeric.showHex "" <$> (Random.randomIO :: IO Int)
       let
-        doc' = responseToXML loginResponse
+        doc' = responseToDoc loginResponse
 
-        fb_dtsg = concat $ doc' XML.$.// (XML.attributeIs "name" "fb_dtsg" >=> XML.attribute "value")
+        fb_dtsg :: Text
+        fb_dtsg = doc' ^. XMLL.root
+                       .  XMLL.entire
+                       .  XMLL.attributeIs "name" "fb_dtsg"
+                       .  XMLL.attr "value"
 
         ttStamp :: Text
         ttStamp = concat [show (Char.ord c) <> "2" | c <- Text.unpack fb_dtsg]
@@ -522,6 +565,9 @@ login (Authentication username password) = do
           , requestCounter = 1
           , payloadDefault = payloadDefault
           , uid = uid
+          , clientId = clientId
+          , messagesReceived = 0
+          , prev = Nothing
           }
 
       return (Just fbSession)
